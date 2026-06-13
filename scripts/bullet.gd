@@ -60,7 +60,7 @@ func _process(delta: float) -> void:
 	# Target hit checks (skipped on remote peers in multiplayer)
 	if local_only:
 		return
- (each bullet only damages the opposing side)
+
 	if owner_tag == "player" and is_instance_valid(robot_ref):
 		if not game_manager.robot_respawning:
 			if position.distance_to(robot_ref.position + Vector3(0, 0.9, 0)) < 0.55:
