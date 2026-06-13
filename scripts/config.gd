@@ -1,4 +1,9 @@
-extends Node
+﻿extends Node
+
+# Multiplayer: maze seed shared by host; 0 = random
+var maze_seed: int = 0
+
+
 
 # ── Map / Level selection (set from menu or directly) ──────────────────────
 # selected_map: 1 = Dungeon (brick/stone), 2 = Ice Cave (ice/frost)

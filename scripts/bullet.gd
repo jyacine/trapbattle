@@ -1,10 +1,11 @@
-extends Node3D
+﻿extends Node3D
 
 class_name Bullet
 
 var direction: Vector3   = Vector3.FORWARD
 var speed: float         = 24.0
 var max_range: float     = 28.0
+var local_only: bool     = false  # if true: visual only, no hit detection (MP remote peer)
 var owner_tag: String    = "player"   # "player" | "robot"
 var game_manager: GameManager
 var player_ref: Node3D
@@ -56,7 +57,10 @@ func _process(delta: float) -> void:
 		queue_free()
 		return
 
-	# Target hit checks (each bullet only damages the opposing side)
+	# Target hit checks (skipped on remote peers in multiplayer)
+	if local_only:
+		return
+ (each bullet only damages the opposing side)
 	if owner_tag == "player" and is_instance_valid(robot_ref):
 		if not game_manager.robot_respawning:
 			if position.distance_to(robot_ref.position + Vector3(0, 0.9, 0)) < 0.55:

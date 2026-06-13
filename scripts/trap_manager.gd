@@ -1,11 +1,11 @@
-extends Node
+﻿extends Node
 
 class_name TrapManager
 
 # ── References ────────────────────────────────────────────────────────────────
 var game_manager: GameManager
 var player: Player
-var robot: Robot
+var robot: Node3D
 var sound_manager: SoundManager
 
 # ── Placed traps on the floor ─────────────────────────────────────────────────
@@ -779,3 +779,8 @@ func _remove_trap(entry: Dictionary) -> void:
 	if entry.has("node") and entry["node"] != null and is_instance_valid(entry["node"]):
 		entry["node"].queue_free()
 	_traps.erase(entry)
+
+# -- Multiplayer: replicate trap placement on all peers atomically.
+@rpc("any_peer", "call_local", "reliable")
+func net_place_trap(cell: Array, owner: String, trap_type: int) -> void:
+	place_trap(cell, owner, trap_type)

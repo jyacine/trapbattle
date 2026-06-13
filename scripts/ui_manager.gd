@@ -5,7 +5,8 @@ class_name UIManager
 # ── References ────────────────────────────────────────────────────────────────
 var game_manager: GameManager
 var player: Player
-var robot: Robot
+var robot: Node3D
+var local_role: String = "player"  # which role the local player has
 
 # ── HUD labels ────────────────────────────────────────────────────────────────
 var _kills_label: Label
@@ -207,7 +208,8 @@ func _update_hud() -> void:
 	]
 
 	# HP bar
-	var ratio = float(game_manager.player_hp) / float(Config.MAX_HP)
+	var my_hp = game_manager.player_hp if local_role == "player" else game_manager.robot_hp
+	var ratio = float(my_hp) / float(Config.MAX_HP)
 	_hp_fill.size.x = 300.0 * ratio
 	if ratio > 0.60:
 		_hp_fill.color = Color(0.15, 0.85, 0.20)
@@ -215,7 +217,7 @@ func _update_hud() -> void:
 		_hp_fill.color = Color(0.92, 0.78, 0.08)
 	else:
 		_hp_fill.color = Color(0.90, 0.15, 0.12)
-	_hp_label.text = "YOU  HP  %d / %d" % [game_manager.player_hp, Config.MAX_HP]
+	_hp_label.text = "YOU  HP  %d / %d" % [my_hp, Config.MAX_HP]
 
 	if player.held_trap >= 0:
 		var trap_col = Config.TRAP_COLORS[player.held_trap]
@@ -442,3 +444,10 @@ func _input(event: InputEvent) -> void:
 			get_tree().reload_current_scene()
 		elif event.keycode == KEY_ESCAPE and not OS.has_feature("web"):
 			get_tree().quit()
+
+# -- Multiplayer: override which node is "local" vs "remote". ─────────────────
+# Called from main.gd after UIManager is added, only in multiplayer mode.
+func setup_players(local_p: Node3D, remote_p: Node3D, role: String) -> void:
+	player     = local_p as Player
+	robot      = remote_p
+	local_role = role

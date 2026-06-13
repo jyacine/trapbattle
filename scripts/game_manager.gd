@@ -23,13 +23,10 @@ var is_playing: bool = true
 var winner: String = ""   # "player" | "robot" | ""
 
 # ── Active effects on player / robot ────────────────────────────────────────
-# Dictionary: effect_name (String) -> time_remaining (float)
-# Effect names: "freeze", "confusion", "glue", "cage", "poison", "blind",
-#               "electric", "mirror"
 var player_effects: Dictionary = {}
 var robot_effects:  Dictionary = {}
 
-# ── Respawn flags (set by TrapManager, cleared by player/robot on _ready) ───
+# ── Respawn flags ────────────────────────────────────────────────────────────
 var player_respawning: bool = false
 var robot_respawning:  bool = false
 var player_respawn_timer: float = 0.0
@@ -41,6 +38,10 @@ var _floor_cells: Array = []
 
 # ────────────────────────────────────────────────────────────────────────────
 func _init() -> void:
+	# Use shared seed in multiplayer so both peers generate the same maze
+	if Config.maze_seed != 0:
+		seed(Config.maze_seed)
+
 	var gen = MazeGenerator.new()
 	grid = gen.generate_maze(Config.MAZE_COLS, Config.MAZE_ROWS, Config.EXTRA_PASSAGES)
 	var spawns = gen.pick_spawns(grid)
@@ -48,7 +49,6 @@ func _init() -> void:
 	robot_start  = spawns["robot"]
 	box_spawns   = spawns["boxes"]
 
-	# Pre-cache floor cells
 	for r in range(grid.size()):
 		for c in range(grid[r].size()):
 			if grid[r][c] == 0:
@@ -59,11 +59,9 @@ func _process(delta: float) -> void:
 	if not is_playing:
 		return
 
-	# Tick down all active effects
 	_tick_effects(player_effects, delta)
 	_tick_effects(robot_effects, delta)
 
-	# Respawn timers
 	if player_respawning:
 		player_respawn_timer -= delta
 		if player_respawn_timer <= 0.0:
@@ -84,8 +82,8 @@ func _tick_effects(effects: Dictionary, delta: float) -> void:
 	for key in to_remove:
 		effects.erase(key)
 
-# ────────────────────────────────────────────────────────────────────────────
-## Deals HP damage; triggers death when HP reaches 0.
+# ── Damage ───────────────────────────────────────────────────────────────────
+## Local damage call (single-player or already replicated).
 func damage_target(target: String, amount: int) -> void:
 	if target == "player":
 		if player_respawning: return
@@ -100,6 +98,29 @@ func damage_target(target: String, amount: int) -> void:
 			robot_hp = Config.MAX_HP
 			robot_died()
 
+## Multiplayer: any peer calls this; it runs on ALL peers (call_local) so
+## HP stays in sync without a server-authoritative round-trip.
+@rpc("any_peer", "call_local", "reliable")
+func net_damage(target: String, amount: int) -> void:
+	damage_target(target, amount)
+
+## Multiplayer: spawn a visual-only bullet on the remote peer.
+## Called by the firing player with call_remote so only the OTHER peer runs it.
+@rpc("any_peer", "call_remote", "reliable")
+func net_spawn_bullet(pos: Vector3, dir: Vector3, owner_tag: String) -> void:
+	var root = get_parent()
+	var b = Bullet.new()
+	b.local_only    = true   # visual only — no hit detection on this peer
+	b.owner_tag     = owner_tag
+	b.direction     = dir
+	b.game_manager  = self
+	b.player_ref    = root.get_node_or_null("Player")
+	b.robot_ref     = root.get_node_or_null("Robot")
+	b.sound_manager = root.get_node_or_null("SoundManager")
+	b.position      = pos
+	root.add_child(b)
+
+# ────────────────────────────────────────────────────────────────────────────
 func player_died() -> void:
 	player_lives -= 1
 	robot_kills  += 1
@@ -120,17 +141,13 @@ func robot_died() -> void:
 
 func _check_win() -> void:
 	if player_kills >= Config.KILLS_TO_WIN:
-		winner     = "player"
-		is_playing = false
+		winner = "player"; is_playing = false
 	elif robot_kills >= Config.KILLS_TO_WIN:
-		winner     = "robot"
-		is_playing = false
+		winner = "robot";  is_playing = false
 	elif player_lives <= 0:
-		winner     = "robot"
-		is_playing = false
+		winner = "robot";  is_playing = false
 	elif robot_lives <= 0:
-		winner     = "player"
-		is_playing = false
+		winner = "player"; is_playing = false
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 func get_random_floor_cell() -> Array:
