@@ -14,10 +14,19 @@ func _ready() -> void:
 	network_manager.name = "NetworkManager"
 	add_child(network_manager)
 
+	if "--server" in OS.get_cmdline_args():
+		# Headless dedicated server — no lobby UI
+		network_manager.lobby_ready.connect(_on_server_ready)
+		network_manager.start_dedicated_server()
+		return
+
 	var lobby = LobbyUI.new()
 	lobby.name = "LobbyUI"
 	add_child(lobby)
 	lobby.start_game.connect(_on_start_game)
+
+func _on_server_ready(seed_val: int) -> void:
+	_on_start_game(seed_val, true)
 
 # ── Game start (called for both single-player and multiplayer) ────────────────
 func _on_start_game(seed_val: int, is_mp: bool) -> void:
@@ -31,7 +40,10 @@ func _on_start_game(seed_val: int, is_mp: bool) -> void:
 	_create_maze()
 
 	if is_mp:
-		_spawn_mp_players()
+		if network_manager.is_dedicated_server:
+			_spawn_dedicated_server_game()
+		else:
+			_spawn_mp_players()
 	else:
 		_spawn_sp_players()
 
@@ -57,7 +69,8 @@ func _on_start_game(seed_val: int, is_mp: bool) -> void:
 		box.name = "TrapBox_%d" % i
 
 	_create_lighting()
-	_create_ui(is_mp)
+	if not network_manager.is_dedicated_server:
+		_create_ui(is_mp)
 
 # ── Single-player: human Player + Robot AI ────────────────────────────────────
 func _spawn_sp_players() -> void:
@@ -80,27 +93,45 @@ func _get_sp_robot() -> Robot:
 
 # ── Multiplayer: two Player nodes, one per peer ───────────────────────────────
 func _spawn_mp_players() -> void:
-	var client_id = network_manager.client_peer_id
+	# Works for both listen-server and dedicated-server clients.
+	# player_peer_id / robot_peer_id are set in NetworkManager before this runs.
+	var p_id = network_manager.player_peer_id if network_manager.player_peer_id != 0 else 1
+	var r_id = network_manager.robot_peer_id  if network_manager.robot_peer_id  != 0 \
+		else (network_manager.client_peer_id  if network_manager.client_peer_id != -1 \
+		else multiplayer.get_unique_id())
 
-	# "Player" node — owned by the host (peer_id 1)
 	var p1 = Player.new()
 	p1.name = "Player"; p1.role = "player"
-	p1.set_multiplayer_authority(1)
+	p1.set_multiplayer_authority(p_id)
 	add_child(p1)
 	_players["player"] = p1
 
-	# "Robot" node — owned by the joining client
 	var p2 = Player.new()
 	p2.name = "Robot"; p2.role = "robot"
-	p2.set_multiplayer_authority(client_id)
+	p2.set_multiplayer_authority(r_id)
 	add_child(p2)
 	_players["robot"] = p2
 
-	# Cross-references for bullet targeting
-	# robot_ref = the node that absorbs "robot" damage → always p2
-	# player_ref on bullet = the node that absorbs "player" damage → always p1
 	p1.robot_ref = p2
-	p2.robot_ref = p1   # p2 fires as "robot"; bullet uses player_ref=robot_ref=p1 to target p1
+	p2.robot_ref = p1
+
+# ── Dedicated server: spawn both player nodes with client authorities ──────────
+func _spawn_dedicated_server_game() -> void:
+	for peer_id in network_manager._role_map:
+		var role = network_manager._role_map[peer_id]
+		var p = Player.new()
+		p.name = "Player" if role == "player" else "Robot"
+		p.role = role
+		p.set_multiplayer_authority(peer_id)
+		add_child(p)
+		_players[role] = p
+		print("[Server] Spawned %s node (authority=%d)" % [role, peer_id])
+
+	var p1 = _players.get("player") as Player
+	var p2 = _players.get("robot")  as Player
+	if p1 and p2:
+		p1.robot_ref = p2
+		p2.robot_ref = p1
 
 # ── Maze geometry ─────────────────────────────────────────────────────────────
 func _create_maze() -> void:

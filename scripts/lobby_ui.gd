@@ -11,6 +11,7 @@ var _ip_field: LineEdit
 func _ready() -> void:
 	_net = get_parent().get_node("NetworkManager")
 	_net.lobby_ready.connect(_on_lobby_ready)
+	_net.connected.connect(_on_connected)
 	_build_ui()
 
 func _build_ui() -> void:
@@ -108,13 +109,22 @@ func _on_join() -> void:
 	_status.text = "Connecting to %s:%d ..." % [ip, NetworkManager.PORT]
 	_net.join_game(ip)
 
-func _on_lobby_ready() -> void:
-	_status.text = "Connected! Starting game..."
+func _on_connected() -> void:
+	_status.text = "Connected — waiting for opponent..."
+
+func _on_lobby_ready(seed_val: int) -> void:
+	_status.text = "Connected!  Starting game..."
 	if multiplayer.is_server():
-		_rpc_start.rpc(randi())
+		# Listen-server host: broadcast seed to both host and client via RPC
+		_rpc_start.rpc(seed_val)
+	else:
+		# Dedicated-server client: role + seed already set by _rpc_assign_role
+		start_game.emit(seed_val, true)
+		queue_free()
 
 @rpc("authority", "call_local", "reliable")
 func _rpc_start(s: int) -> void:
+	# Listen-server only: fires on both host and joining client
 	start_game.emit(s, true)
 	queue_free()
 
