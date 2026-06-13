@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <rect width="128" height="128" rx="18" fill="#1a1a2e"/>
+  <!-- Maze walls -->
+  <rect x="10" y="10" width="108" height="8" fill="#4a3a8c"/>
+  <rect x="10" y="10" width="8" height="108" fill="#4a3a8c"/>
+  <rect x="10" y="110" width="108" height="8" fill="#4a3a8c"/>
+  <rect x="110" y="10" width="8" height="108" fill="#4a3a8c"/>
+  <rect x="30" y="10" width="8" height="60" fill="#4a3a8c"/>
+  <rect x="50" y="40" width="8" height="78" fill="#4a3a8c"/>
+  <rect x="70" y="10" width="8" height="60" fill="#4a3a8c"/>
+  <rect x="90" y="50" width="8" height="68" fill="#4a3a8c"/>
+  <!-- Player dot -->
+  <circle cx="40" cy="85" r="7" fill="#00d4ff"/>
+  <!-- Robot dot -->
+  <circle cx="100" cy="30" r="7" fill="#ff4444"/>
+  <!-- Trap box with glow -->
+  <rect x="73" y="73" width="14" height="14" rx="2" fill="#ffcc00"/>
+  <circle cx="80" cy="80" r="10" fill="none" stroke="#ffcc00" stroke-width="2" opacity="0.5"/>
+  <!-- Lightning bolt (trap symbol) -->
+  <polygon points="60,20 52,38 62,38 54,58 70,34 60,34 68,20" fill="#ff8800"/>
+</svg>
