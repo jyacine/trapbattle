@@ -19,6 +19,7 @@ This script sets both automatically.
 
 import argparse
 import os
+import socket
 import sys
 import webbrowser
 from functools import partial
@@ -66,9 +67,16 @@ def main():
     handler = partial(GodotHandler, directory=export_dir)
     server  = HTTPServer(("0.0.0.0", args.port), handler)
 
+    try:
+        local_ip = socket.gethostbyname(socket.gethostname())
+    except Exception:
+        local_ip = "127.0.0.1"
+
     url = f"http://localhost:{args.port}"
     print(f"Serving Godot HTML export from: {export_dir}")
     print(f"Open in browser:                {url}")
+    print(f"Your local IP (enter in JOIN):  {local_ip}")
+    print(f"Game server WebSocket port:     9999  (run trapbattle-server separately)")
     print("Press Ctrl+C to stop.\n")
 
     if not args.no_browser:

@@ -60,18 +60,23 @@ func _build_ui() -> void:
 	_ip_field.offset_top = 8; _ip_field.offset_bottom = 52
 	add_child(_ip_field)
 
+	var is_web = OS.has_feature("web")
+
 	var btn_host = _mk_btn("HOST GAME", Color(0.15, 0.35, 0.85))
 	btn_host.anchor_left = 0.5; btn_host.anchor_right = 0.5
 	btn_host.anchor_top = 0.5; btn_host.anchor_bottom = 0.5
 	btn_host.offset_left = -210; btn_host.offset_right = -8
 	btn_host.offset_top = 62; btn_host.offset_bottom = 122
 	btn_host.pressed.connect(_on_host)
+	btn_host.visible = not is_web   # browsers can't act as a server
 	add_child(btn_host)
 
+	# In web: JOIN spans full width since HOST is hidden
+	var join_left = 8 if not is_web else -210
 	var btn_join = _mk_btn("JOIN GAME", Color(0.75, 0.25, 0.10))
 	btn_join.anchor_left = 0.5; btn_join.anchor_right = 0.5
 	btn_join.anchor_top = 0.5; btn_join.anchor_bottom = 0.5
-	btn_join.offset_left = 8; btn_join.offset_right = 210
+	btn_join.offset_left = join_left; btn_join.offset_right = 210
 	btn_join.offset_top = 62; btn_join.offset_bottom = 122
 	btn_join.pressed.connect(_on_join)
 	add_child(btn_join)

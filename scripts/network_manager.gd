@@ -7,21 +7,18 @@ signal peer_left
 
 const PORT := 9999
 
-var my_role: String = "player"      # "player" | "robot"
+var my_role: String = "player"
 
-# Peer IDs for both roles — populated before lobby_ready fires
 var player_peer_id: int = 0
 var robot_peer_id:  int = 0
-
-# Listen-server only: the joining client's peer_id
 var client_peer_id: int = -1
 
-# ── Listen server (host also plays as "player") ───────────────────────────────
+# ── Listen server ─────────────────────────────────────────────────────────────
 func host_game() -> void:
 	my_role        = "player"
-	player_peer_id = 1   # host is always peer_id 1
-	var peer = ENetMultiplayerPeer.new()
-	var err  = peer.create_server(PORT, 2)
+	player_peer_id = 1
+	var peer = WebSocketMultiplayerPeer.new()
+	var err  = peer.create_server(PORT)
 	if err != OK:
 		push_error("NetworkManager: server creation failed (%d)" % err)
 		return
@@ -32,15 +29,16 @@ func host_game() -> void:
 func _on_listen_peer_connected(id: int) -> void:
 	client_peer_id = id
 	robot_peer_id  = id
-	lobby_ready.emit(randi())   # host picks seed; lobby_ui broadcasts via _rpc_start
+	lobby_ready.emit(randi())
 
-# ── Client (dedicated server OR listen server) ────────────────────────────────
+# ── Client ────────────────────────────────────────────────────────────────────
 func join_game(ip: String) -> void:
-	my_role = "robot"   # tentative for listen-server; overwritten by _rpc_assign_role
-	var peer = ENetMultiplayerPeer.new()
-	var err  = peer.create_client(ip, PORT)
+	my_role = "robot"
+	var url = "ws://%s:%d" % [ip, PORT]
+	var peer = WebSocketMultiplayerPeer.new()
+	var err  = peer.create_client(url)
 	if err != OK:
-		push_error("NetworkManager: connect to %s:%d failed (%d)" % [ip, PORT, err])
+		push_error("NetworkManager: connect to %s failed (%d)" % [url, err])
 		return
 	multiplayer.multiplayer_peer = peer
 	multiplayer.connected_to_server.connect(_on_connected_ok)
@@ -48,7 +46,7 @@ func join_game(ip: String) -> void:
 	multiplayer.server_disconnected.connect(_on_server_left)
 
 func _on_connected_ok() -> void:
-	connected.emit()   # UI shows "waiting for opponent…"
+	connected.emit()
 
 # Sent from the dedicated server to assign each client their role + maze seed.
 @rpc("authority", "call_remote", "reliable")
@@ -67,3 +65,8 @@ func _on_conn_fail() -> void:
 
 func _on_server_left() -> void:
 	peer_left.emit()
+
+# WebSocketMultiplayerPeer must be polled manually every frame.
+func _process(_delta: float) -> void:
+	if multiplayer.has_multiplayer_peer():
+		multiplayer.multiplayer_peer.poll()
