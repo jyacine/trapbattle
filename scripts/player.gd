@@ -2,17 +2,24 @@ extends CharacterBody3D
 
 class_name Player
 
+# ── Identity ─────────────────────────────────────────────────────────────────
+# peer_id:      actual Godot multiplayer peer ID (1 = host; 0 = robot AI sentinel)
+# player_index: 0-9 slot — determines color and spawn point
+var peer_id:      int = 0
+var player_index: int = 0
+
 # ── References ───────────────────────────────────────────────────────────────
 var game_manager: GameManager
 var trap_manager: Node
+var sound_manager: SoundManager
 
 # ── Movement ─────────────────────────────────────────────────────────────────
-var move_speed: float         = Config.PLAYER_SPEED
-var rotation_speed: float     = Config.PLAYER_ROTATION_SPEED
-var mouse_sensitivity: float  = Config.MOUSE_SENSITIVITY
-var player_radius: float      = Config.PLAYER_RADIUS
-var yaw: float                = 0.0
-var pitch: float              = 0.0
+var move_speed:        float = Config.PLAYER_SPEED
+var rotation_speed:    float = Config.PLAYER_ROTATION_SPEED
+var mouse_sensitivity: float = Config.MOUSE_SENSITIVITY
+var player_radius:     float = Config.PLAYER_RADIUS
+var yaw:               float = 0.0
+var pitch:             float = 0.0
 var _pending_yaw_delta: float = 0.0
 
 # ── Camera ───────────────────────────────────────────────────────────────────
@@ -23,9 +30,6 @@ var held_trap: int = -1
 var _pickup_cooldown: float = 0.0
 
 # ── Gun ───────────────────────────────────────────────────────────────────────
-# robot_ref = the opponent node (Robot AI in SP, other Player in MP)
-var robot_ref: Node3D
-var sound_manager: SoundManager
 var _gun_cooldown: float = 0.0
 const GUN_RANGE    := 28.0
 const GUN_COOLDOWN := 1.5
@@ -37,29 +41,27 @@ var _blind_overlay: ColorRect
 var current_grid_pos: Array = [0, 0]
 
 # ── Touch input ───────────────────────────────────────────────────────────────
-var touch_forward: bool  = false
-var touch_backward: bool = false
-var _touch_turn_id: int   = -1
+var touch_forward:    bool  = false
+var touch_backward:   bool  = false
+var _touch_turn_id:   int   = -1
 var _touch_turn_prev: Vector2 = Vector2.ZERO
 
 # ── Multiplayer ───────────────────────────────────────────────────────────────
-# role: "player" (host) or "robot" (joining client).
-# Determines which HP slot / effect bucket / trap owner tag belongs to this character.
-var role: String = "player"
-
-# is_local: true when THIS peer controls this character.
-# Set from is_multiplayer_authority() in _ready(); always true in single-player.
 var is_local: bool = true
 
-# Remote-body 3D HP bar (only built when is_local == false)
+# Remote-body HP bar (only built when is_local == false)
 var _hp3_fill_mi: MeshInstance3D = null
 var _hp3_fill_q:  QuadMesh       = null
 var _hp3_label:   Label3D        = null
 
+# ── Backward-compat alias (robot.gd / old callers) ───────────────────────────
+var robot_ref: Node3D  # unused in N-player but kept so existing robot.gd compiles
+
 # ────────────────────────────────────────────────────────────────────────────
 func _ready() -> void:
+	add_to_group("players")
 	game_manager = get_parent().get_node("GameManager")
-	is_local     = is_multiplayer_authority()   # always true in single-player
+	is_local     = is_multiplayer_authority()   # true in SP (no peer) or on authority peer
 
 	var col = CollisionShape3D.new()
 	var cap = CapsuleShape3D.new()
@@ -67,18 +69,18 @@ func _ready() -> void:
 	col.shape  = cap
 	add_child(col)
 
-	var start = game_manager.player_start if role == "player" else game_manager.robot_start
+	var spawn_cell = game_manager.get_spawn_for_index(player_index)
 
 	if is_local:
 		camera_node = Camera3D.new()
 		camera_node.position = Vector3(0, 1.6, 0)
 		add_child(camera_node)
-		_teleport_to(start)
+		_teleport_to(spawn_cell)
 		if not OS.has_feature("web"):
 			Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 	else:
 		_build_remote_body()
-		_teleport_to(start)
+		_teleport_to(spawn_cell)
 
 # ────────────────────────────────────────────────────────────────────────────
 func _physics_process(delta: float) -> void:
@@ -95,16 +97,11 @@ func _physics_process(delta: float) -> void:
 	yaw += _pending_yaw_delta
 	_pending_yaw_delta = 0.0
 
-	# Respawn uses role to pick the correct GM slot
-	var is_respawning = game_manager.player_respawning if role == "player" \
-	                                                   else game_manager.robot_respawning
-	var start_cell    = game_manager.player_start      if role == "player" \
-	                                                   else game_manager.robot_start
-	if is_respawning:
-		_teleport_to(start_cell)
+	if game_manager.respawning.get(peer_id, false):
+		_teleport_to(game_manager.get_spawn_for_index(player_index))
 		return
 
-	var is_confused = game_manager.has_effect(role, "confusion")
+	var is_confused = game_manager.has_effect(peer_id, "confusion")
 	var turn_dir = 0.0
 	if Input.is_key_pressed(KEY_Q): turn_dir -= rotation_speed * delta
 	if Input.is_key_pressed(KEY_E): turn_dir += rotation_speed * delta
@@ -112,15 +109,15 @@ func _physics_process(delta: float) -> void:
 	yaw += turn_dir
 	rotation.y = yaw
 
-	var can_move = not (game_manager.has_effect(role, "glue") or
-	                    game_manager.has_effect(role, "cage") or
-	                    game_manager.has_effect(role, "electric"))
+	var can_move = not (game_manager.has_effect(peer_id, "glue") or
+	                    game_manager.has_effect(peer_id, "cage") or
+	                    game_manager.has_effect(peer_id, "electric"))
 
 	if can_move:
-		var speed_mult = 0.25 if game_manager.has_effect(role, "freeze") else 1.0
+		var speed_mult = 0.25 if game_manager.has_effect(peer_id, "freeze") else 1.0
 		var move = 0.0
-		if Input.is_action_pressed("ui_up")   or Input.is_key_pressed(KEY_W) or touch_forward:  move += 1.0
-		if Input.is_action_pressed("ui_down")  or Input.is_key_pressed(KEY_S) or touch_backward: move -= 1.0
+		if Input.is_action_pressed("ui_up")  or Input.is_key_pressed(KEY_W) or touch_forward:  move += 1.0
+		if Input.is_action_pressed("ui_down") or Input.is_key_pressed(KEY_S) or touch_backward: move -= 1.0
 		if is_confused: move = -move
 		if move != 0.0:
 			var forward  = Vector3(-sin(yaw), 0.0, -cos(yaw))
@@ -138,9 +135,8 @@ func _physics_process(delta: float) -> void:
 	_try_pickup()
 
 	if _blind_overlay:
-		_blind_overlay.visible = game_manager.has_effect(role, "blind")
+		_blind_overlay.visible = game_manager.has_effect(peer_id, "blind")
 
-	# Broadcast position to remote peer in multiplayer
 	if multiplayer.has_multiplayer_peer():
 		_net_pos.rpc(position, yaw)
 
@@ -204,19 +200,16 @@ func _fire_gun() -> void:
 	var forward = Vector3(-sin(yaw), 0.0, -cos(yaw))
 	_spawn_bullet_local(spawn_pos, forward)
 
-	# In multiplayer: remote peer gets a visual-only copy (no hit detection)
 	if multiplayer.has_multiplayer_peer():
-		game_manager.net_spawn_bullet.rpc(spawn_pos, forward, role)
+		game_manager.net_spawn_bullet.rpc(spawn_pos, forward, peer_id, player_index)
 
 func _spawn_bullet_local(pos: Vector3, dir: Vector3) -> void:
 	var b = Bullet.new()
-	b.owner_tag     = role
+	b.owner_peer_id = peer_id
+	b.owner_index   = player_index
 	b.direction     = dir
 	b.local_only    = false
 	b.game_manager  = game_manager
-	# robot_ref = node that receives "robot" damage; player_ref = node that receives "player" damage
-	b.robot_ref     = robot_ref
-	b.player_ref    = self if role == "player" else robot_ref
 	b.sound_manager = sound_manager
 	b.position      = pos
 	get_parent().add_child(b)
@@ -231,9 +224,9 @@ func _try_place() -> void:
 	var target_cell = throw_cell if game_manager.is_floor(throw_cell[0], throw_cell[1]) \
 	                             else current_grid_pos
 	if multiplayer.has_multiplayer_peer():
-		trap_manager.net_place_trap.rpc(target_cell, role, held_trap)
+		trap_manager.net_place_trap.rpc(target_cell, peer_id, held_trap)
 	else:
-		trap_manager.place_trap(target_cell, role, held_trap)
+		trap_manager.place_trap(target_cell, peer_id, held_trap)
 	held_trap = -1
 
 # ── Auto pick-up ─────────────────────────────────────────────────────────────
@@ -255,12 +248,15 @@ func _net_pos(pos: Vector3, y: float) -> void:
 	if is_multiplayer_authority(): return
 	position = pos; yaw = y; rotation.y = yaw
 
-# ── Remote body (shown to other peer when they control this node) ─────────────
+# ── Remote body ───────────────────────────────────────────────────────────────
 func _build_remote_body() -> void:
-	var bm = StandardMaterial3D.new()
-	bm.albedo_color = Color(0.2, 0.2, 0.3); bm.metallic = 0.8; bm.roughness = 0.3
-	var am = StandardMaterial3D.new()
-	am.albedo_color = Color(0.05, 0.5, 0.8); am.metallic = 1.0; am.roughness = 0.1
+	var pc  = Config.PLAYER_COLORS[player_index % Config.PLAYER_COLORS.size()]
+	var bm  = StandardMaterial3D.new()
+	bm.albedo_color = pc.darkened(0.35); bm.metallic = 0.8; bm.roughness = 0.3
+	var am  = StandardMaterial3D.new()
+	am.albedo_color = pc; am.emission_enabled = true
+	am.emission = pc; am.emission_energy_multiplier = 0.8
+	am.metallic = 1.0; am.roughness = 0.1
 
 	var parts = [
 		[Vector3(0.5,  0.6,  0.3 ), Vector3( 0,    0.70, 0   ), bm],
@@ -277,8 +273,8 @@ func _build_remote_body() -> void:
 		add_child(box)
 
 	var eye = OmniLight3D.new()
-	eye.position = Vector3(0, 1.4, 0); eye.light_color = Color(1.0, 0.1, 0.1)
-	eye.light_energy = 1.0; eye.omni_range = 3.0; add_child(eye)
+	eye.position = Vector3(0, 1.4, 0); eye.light_color = pc
+	eye.light_energy = 1.5; eye.omni_range = 3.0; add_child(eye)
 
 	_build_hp3_bar()
 
@@ -296,7 +292,7 @@ func _build_hp3_bar() -> void:
 	bg.mesh = bgq; bg.set_surface_override_material(0, bg_m); root.add_child(bg)
 
 	var fill_m = StandardMaterial3D.new()
-	fill_m.albedo_color = Color(0.88, 0.12, 0.12)
+	fill_m.albedo_color = Config.PLAYER_COLORS[player_index % Config.PLAYER_COLORS.size()]
 	fill_m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	fill_m.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
 	fill_m.billboard_keep_scale = true
@@ -314,17 +310,17 @@ func _build_hp3_bar() -> void:
 
 func _update_hp3_bar() -> void:
 	if _hp3_fill_mi == null: return
-	var hp    = game_manager.player_hp if role == "player" else game_manager.robot_hp
-	var ratio = float(hp) / float(Config.MAX_HP)
+	var h     = game_manager.hp.get(peer_id, Config.MAX_HP)
+	var ratio = float(h) / float(Config.MAX_HP)
 	var fw    = 0.66
 	_hp3_fill_q.size.x      = fw * ratio
 	_hp3_fill_mi.position.x = -(fw - fw * ratio) / 2.0
 	var m = _hp3_fill_mi.get_surface_override_material(0) as StandardMaterial3D
 	if m:
-		if   ratio > 0.60: m.albedo_color = Color(0.88, 0.12, 0.12)
+		if   ratio > 0.60: m.albedo_color = Config.PLAYER_COLORS[player_index % Config.PLAYER_COLORS.size()]
 		elif ratio > 0.30: m.albedo_color = Color(0.92, 0.50, 0.08)
 		else:              m.albedo_color = Color(0.95, 0.80, 0.05)
-	if _hp3_label: _hp3_label.text = "%d HP" % hp
+	if _hp3_label: _hp3_label.text = "%d HP" % h
 
 # ── Walkability ───────────────────────────────────────────────────────────────
 func _is_walkable(pos: Vector3) -> bool:
@@ -336,6 +332,18 @@ func _is_walkable(pos: Vector3) -> bool:
 			var clx = clamp(pos.x, cx*cs, (cx+1)*cs)
 			var clz = clamp(pos.z, cz*cs, (cz+1)*cs)
 			if (pos.x-clx)*(pos.x-clx) + (pos.z-clz)*(pos.z-clz) < r*r: return false
+
+	# Player-player collision: block movement if too close to another body
+	var combined_sq = (player_radius * 2.0) * (player_radius * 2.0)
+	for other in get_tree().get_nodes_in_group("players"):
+		if other == self or not is_instance_valid(other): continue
+		# Skip players currently respawning (they are teleporting, not blocking)
+		var other_pid = other.get("peer_id")
+		if other_pid != null and game_manager.respawning.get(other_pid, false): continue
+		var dx = pos.x - other.position.x
+		var dz = pos.z - other.position.z
+		if dx * dx + dz * dz < combined_sq: return false
+
 	return true
 
 # ── Utility ──────────────────────────────────────────────────────────────────

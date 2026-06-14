@@ -1,11 +1,11 @@
-﻿extends Node3D
+extends Node3D
 
 var game_manager: GameManager
 var trap_manager: TrapManager
 var sound_manager: SoundManager
 var network_manager: NetworkManager
 
-# Keyed by role: "player" and "robot"
+# peer_id -> player node (Player or Robot)
 var _players: Dictionary = {}
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -13,15 +13,15 @@ func _ready() -> void:
 	network_manager = NetworkManager.new()
 	network_manager.name = "NetworkManager"
 	add_child(network_manager)
+	network_manager.peer_left.connect(_on_peer_left)
 
 	var lobby = LobbyUI.new()
 	lobby.name = "LobbyUI"
 	add_child(lobby)
 	lobby.start_game.connect(_on_start_game)
 
-# ── Game start (called for both single-player and multiplayer) ────────────────
+# ── Game start ────────────────────────────────────────────────────────────────
 func _on_start_game(seed_val: int, is_mp: bool) -> void:
-	# Seed must be set BEFORE GameManager._init() generates the maze
 	Config.maze_seed = seed_val
 
 	game_manager = GameManager.new()
@@ -35,7 +35,6 @@ func _on_start_game(seed_val: int, is_mp: bool) -> void:
 	else:
 		_spawn_sp_players()
 
-	# TrapManager added after players so get_node("Player/Robot") resolves
 	trap_manager = TrapManager.new()
 	trap_manager.name = "TrapManager"
 	add_child(trap_manager)
@@ -57,50 +56,42 @@ func _on_start_game(seed_val: int, is_mp: bool) -> void:
 		box.name = "TrapBox_%d" % i
 
 	_create_lighting()
-	_create_ui(is_mp)
+	_create_ui()
 
 # ── Single-player: human Player + Robot AI ────────────────────────────────────
 func _spawn_sp_players() -> void:
+	game_manager.register_player(1)
 	var player = Player.new()
-	player.name = "Player"
-	player.role = "player"
-	# is_local defaults true; authority = self in offline multiplayer
+	player.name         = "Player"
+	player.peer_id      = 1
+	player.player_index = 0
 	add_child(player)
-	_players["player"] = player
+	_players[1] = player
 
+	game_manager.register_player(0)
 	var robot = Robot.new()
-	robot.name = "Robot"
+	robot.name         = "Robot"
+	robot.peer_id      = 0
+	robot.player_index = 1
 	add_child(robot)
-	_players["robot"] = robot
+	_players[0] = robot
 
-	player.robot_ref = robot
+	player.robot_ref = robot   # backward compat for robot.gd pathfinding reference
 
-func _get_sp_robot() -> Robot:
-	return _players.get("robot") as Robot
-
-# ── Multiplayer: two Player nodes, one per peer ───────────────────────────────
+# ── Multiplayer: one Player node per connected peer ───────────────────────────
 func _spawn_mp_players() -> void:
-	# player_peer_id / robot_peer_id are set in NetworkManager before this runs
-	# (by _rpc_assign_role for dedicated server, or host_game for listen-server).
-	var p_id = network_manager.player_peer_id if network_manager.player_peer_id != 0 else 1
-	var r_id = network_manager.robot_peer_id  if network_manager.robot_peer_id  != 0 \
-		else (network_manager.client_peer_id  if network_manager.client_peer_id != -1 \
-		else multiplayer.get_unique_id())
+	var assignments = network_manager.assignments   # {peer_id: player_index}
+	for pid in assignments:
+		var idx = assignments[pid]
+		game_manager.register_player(pid)
 
-	var p1 = Player.new()
-	p1.name = "Player"; p1.role = "player"
-	p1.set_multiplayer_authority(p_id)
-	add_child(p1)
-	_players["player"] = p1
-
-	var p2 = Player.new()
-	p2.name = "Robot"; p2.role = "robot"
-	p2.set_multiplayer_authority(r_id)
-	add_child(p2)
-	_players["robot"] = p2
-
-	p1.robot_ref = p2
-	p2.robot_ref = p1
+		var p = Player.new()
+		p.name         = "Player_%d" % idx
+		p.peer_id      = pid
+		p.player_index = idx
+		p.set_multiplayer_authority(pid)
+		add_child(p)
+		_players[pid] = p
 
 # ── Maze geometry ─────────────────────────────────────────────────────────────
 func _create_maze() -> void:
@@ -229,16 +220,34 @@ func _create_lighting() -> void:
 	add_child(dir_light)
 	world_env.environment = env; add_child(world_env)
 
-# ── UI ────────────────────────────────────────────────────────────────────────
-func _create_ui(is_mp: bool) -> void:
-	var ui = UIManager.new()
-	add_child(ui)
-	ui.name = "UI"
+# ── Peer disconnect ───────────────────────────────────────────────────────────
+func _on_peer_left(pid: int) -> void:
+	if pid == -1:
+		# Host disconnected — reload to main menu
+		get_tree().reload_current_scene()
+		return
 
-	# In multiplayer, tell UIManager which node is "local" vs "remote" so HP
-	# bars, crosshair, and gun cooldown display from the correct perspective.
-	if is_mp:
-		var my_role = network_manager.my_role
-		var local_p  = _players[my_role]
-		var remote_p = _players["robot" if my_role == "player" else "player"]
-		ui.setup_players(local_p, remote_p, my_role)
+	# Remove the player node from the game world
+	if _players.has(pid):
+		var node = _players[pid]
+		if is_instance_valid(node):
+			node.queue_free()
+		_players.erase(pid)
+
+	# Clean up game_manager state so dead peer doesn't affect scoring / win-check
+	if game_manager and is_instance_valid(game_manager):
+		game_manager.player_ids.erase(pid)
+		game_manager.hp.erase(pid)
+		game_manager.lives.erase(pid)
+		game_manager.kills.erase(pid)
+		game_manager.effects.erase(pid)
+		game_manager.respawning.erase(pid)
+		game_manager._respawn_timers.erase(pid)
+		game_manager._last_damager.erase(pid)
+
+# ── UI ────────────────────────────────────────────────────────────────────────
+func _create_ui() -> void:
+	var ui = UIManager.new()
+	ui.name = "UI"
+	add_child(ui)
+	# UIManager discovers the local player via the "players" group in its _ready()
