@@ -354,30 +354,6 @@ func _update_hp3_bar() -> void:
 		else:              m.albedo_color = Color(0.95, 0.80, 0.05)
 	if _hp3_label: _hp3_label.text = "%d HP" % h
 
-# ── Walkability ───────────────────────────────────────────────────────────────
-func _is_walkable(pos: Vector3) -> bool:
-	var cs = Config.CELL_SIZE; var r = player_radius; var grid = game_manager.grid
-	for cz in range(int(floor((pos.z - r) / cs)), int(floor((pos.z + r) / cs)) + 1):
-		for cx in range(int(floor((pos.x - r) / cs)), int(floor((pos.x + r) / cs)) + 1):
-			if cx < 0 or cx >= grid[0].size() or cz < 0 or cz >= grid.size(): return false
-			if grid[cz][cx] != 1: continue
-			var clx = clamp(pos.x, cx*cs, (cx+1)*cs)
-			var clz = clamp(pos.z, cz*cs, (cz+1)*cs)
-			if (pos.x-clx)*(pos.x-clx) + (pos.z-clz)*(pos.z-clz) < r*r: return false
-
-	# Player-player collision: block movement if too close to another body
-	var combined_sq = (player_radius * 2.0) * (player_radius * 2.0)
-	for other in get_tree().get_nodes_in_group("players"):
-		if other == self or not is_instance_valid(other): continue
-		# Skip players currently respawning (they are teleporting, not blocking)
-		var other_pid = other.get("peer_id")
-		if other_pid != null and game_manager.respawning.get(other_pid, false): continue
-		var dx = pos.x - other.position.x
-		var dz = pos.z - other.position.z
-		if dx * dx + dz * dz < combined_sq: return false
-
-	return true
-
 # ── Utility ──────────────────────────────────────────────────────────────────
 func _teleport_to(cell: Array) -> void:
 	position = game_manager.grid_to_world(cell); current_grid_pos = cell.duplicate()
