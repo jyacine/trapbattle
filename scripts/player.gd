@@ -58,6 +58,11 @@ var _hp3_fill_mi: MeshInstance3D = null
 var _hp3_fill_q:  QuadMesh       = null
 var _hp3_label:   Label3D        = null
 
+# ── Viewmodel (first-person gun) ─────────────────────────────────────────────
+var _viewmodel_root: Node3D = null
+var _vm_sway_time:   float  = 0.0
+var _vm_recoil:      float  = 0.0
+
 # ── Backward-compat alias (robot.gd / old callers) ───────────────────────────
 var robot_ref: Node3D  # unused in N-player but kept so existing robot.gd compiles
 
@@ -79,6 +84,7 @@ func _ready() -> void:
 		camera_node = Camera3D.new()
 		camera_node.position = Vector3(0, 1.6, 0)
 		add_child(camera_node)
+		_build_viewmodel()
 		_teleport_to(spawn_cell)
 		if not OS.has_feature("web"):
 			Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
@@ -149,6 +155,8 @@ func _physics_process(delta: float) -> void:
 	if _blind_overlay:
 		_blind_overlay.visible = game_manager.has_effect(peer_id, "blind")
 
+	_update_viewmodel(delta)
+
 	if multiplayer.has_multiplayer_peer():
 		_net_pos.rpc(position, yaw)
 
@@ -200,6 +208,7 @@ func _fire_gun() -> void:
 	if _gun_cooldown > 0.0 or not game_manager.is_playing:
 		return
 	_gun_cooldown = GUN_COOLDOWN
+	_vm_recoil    = 1.0
 	if sound_manager: sound_manager.play_gun_fire()
 
 	var spawn_pos = position + Vector3(0, 0.9, 0)
@@ -374,3 +383,67 @@ func get_grid_position() -> Array:
 
 func set_blind_overlay(overlay: ColorRect) -> void:
 	_blind_overlay = overlay
+
+# ── Viewmodel ─────────────────────────────────────────────────────────────────
+func _build_viewmodel() -> void:
+	_viewmodel_root = Node3D.new()
+	# Bottom-right of view, angled slightly inward
+	_viewmodel_root.position        = Vector3(0.24, -0.20, -0.38)
+	_viewmodel_root.rotation_degrees = Vector3(0.0, -10.0, 0.0)
+	camera_node.add_child(_viewmodel_root)
+
+	var grey = StandardMaterial3D.new()
+	grey.albedo_color = Color(0.28, 0.31, 0.36)
+	grey.metallic = 0.85; grey.roughness = 0.22
+
+	var dark = StandardMaterial3D.new()
+	dark.albedo_color = Color(0.15, 0.17, 0.20)
+	dark.metallic = 0.90; dark.roughness = 0.18
+
+	var red_mat = StandardMaterial3D.new()
+	red_mat.albedo_color = Color(0.85, 0.05, 0.05)
+	red_mat.emission_enabled = true
+	red_mat.emission = Color(1.0, 0.08, 0.08)
+	red_mat.emission_energy_multiplier = 2.5
+
+	# Frame / lower receiver
+	_vm_box(Vector3(0.068, 0.052, 0.220), Vector3( 0.000,  0.000,  0.000), grey)
+	# Slide (upper, slightly narrower and taller)
+	_vm_box(Vector3(0.050, 0.040, 0.195), Vector3( 0.000,  0.046, -0.008), dark)
+	# Barrel extension past slide
+	_vm_box(Vector3(0.024, 0.024, 0.085), Vector3( 0.000,  0.026, -0.148), dark)
+	# Grip
+	_vm_box(Vector3(0.056, 0.108, 0.052), Vector3( 0.003, -0.078,  0.062), grey)
+	# Trigger guard
+	_vm_box(Vector3(0.010, 0.006, 0.050), Vector3( 0.000, -0.025,  0.008), dark)
+	# Red laser sight on left flank
+	_vm_box(Vector3(0.018, 0.020, 0.034), Vector3(-0.044, -0.005, -0.055), red_mat)
+
+func _vm_box(size: Vector3, pos: Vector3, mat: StandardMaterial3D) -> void:
+	var mi := MeshInstance3D.new()
+	var bm := BoxMesh.new()
+	bm.size = size
+	mi.mesh = bm
+	mi.set_surface_override_material(0, mat)
+	mi.position = pos
+	_viewmodel_root.add_child(mi)
+
+func _update_viewmodel(delta: float) -> void:
+	if _viewmodel_root == null: return
+
+	# Idle breath sway
+	_vm_sway_time += delta
+	var idle_y := sin(_vm_sway_time * 1.15) * 0.0025
+	var idle_x := sin(_vm_sway_time * 0.70) * 0.0015
+
+	# Recoil kick — gun slides back then returns
+	_vm_recoil = max(0.0, _vm_recoil - delta * 9.0)
+	var recoil_z   :=  _vm_recoil * 0.055
+	var recoil_rot := -_vm_recoil * 6.0   # muzzle lifts on fire
+
+	_viewmodel_root.position = Vector3(
+		0.24  + idle_x,
+		-0.20 + idle_y,
+		-0.38 + recoil_z
+	)
+	_viewmodel_root.rotation_degrees = Vector3(recoil_rot, -10.0, 0.0)
