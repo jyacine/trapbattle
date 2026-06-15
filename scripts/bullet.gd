@@ -60,9 +60,9 @@ func _process(delta: float) -> void:
 		var target_pid = target.get("peer_id")
 		if target_pid == null or target_pid == owner_peer_id: continue
 		if game_manager.respawning.get(target_pid, false): continue
-		var dx := position.x - target.position.x
-		var dz := position.z - target.position.z
-		var y_rel := position.y - target.position.y
+		var dx: float = position.x - target.position.x
+		var dz: float = position.z - target.position.z
+		var y_rel: float = position.y - target.position.y
 		if dx * dx + dz * dz < HIT_RADIUS * HIT_RADIUS \
 				and y_rel > BODY_MIN_Y and y_rel < BODY_MAX_Y:
 			if multiplayer.has_multiplayer_peer():
