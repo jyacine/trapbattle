@@ -48,8 +48,8 @@ trapbattle/
 1. Open the project in Godot, or use the CLI:
 
 ```powershell
-$GODOT = "C:\Users\XDGT0500\Downloads\Godot_v4.6.3-stable_win64.exe"
-& $GODOT --headless --path "C:\work\game\trapbattle" --export-release "Web" "export/index.html"
+$GODOT = "<path to Godot executable>"
+& $GODOT --headless --path "<path to trapbattle>" --export-release "Web" "export/index.html"
 ```
 
 The preset outputs to `export/index.html` (and companion `index.js`, `index.wasm`, etc.).  
