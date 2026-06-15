@@ -51,6 +51,10 @@ var touch_move_y: float = 0.0   # drive:  -1 (back)  .. +1 (forward)
 # ── Multiplayer ───────────────────────────────────────────────────────────────
 var is_local: bool = true
 
+# True on phones/tablets — pointer input is owned by UIManager's on-screen pads,
+# so we ignore (emulated) mouse events here to avoid double-turning the camera.
+var _is_touch: bool = false
+
 # Remote-body HP bar (only built when is_local == false)
 var _hp3_fill_mi: MeshInstance3D = null
 var _hp3_fill_q:  QuadMesh       = null
@@ -69,6 +73,7 @@ func _ready() -> void:
 	add_to_group("players")
 	game_manager = get_parent().get_node("GameManager")
 	is_local     = is_multiplayer_authority()   # true in SP (no peer) or on authority peer
+	_is_touch    = UIManager._is_mobile_device()
 
 	var col = CollisionShape3D.new()
 	var cap = CapsuleShape3D.new()
@@ -175,18 +180,22 @@ func _input(event: InputEvent) -> void:
 	if not is_local:
 		return
 
-	if event is InputEventMouseButton and event.pressed:
-		if event.button_index == MOUSE_BUTTON_LEFT:
-			if Input.mouse_mode == Input.MOUSE_MODE_CAPTURED: _fire_gun()
-			else: Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
-		else:
-			Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+	# Mouse-look / click-to-fire only on non-touch devices. On phones the joystick
+	# and look pads (UIManager) handle pointing; processing the emulated mouse here
+	# would let joystick drags also turn the camera and make movement go haywire.
+	if not _is_touch:
+		if event is InputEventMouseButton and event.pressed:
+			if event.button_index == MOUSE_BUTTON_LEFT:
+				if Input.mouse_mode == Input.MOUSE_MODE_CAPTURED: _fire_gun()
+				else: Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+			else:
+				Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 
-	if event is InputEventMouseMotion and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
-		_pending_yaw_delta -= event.relative.x * mouse_sensitivity
-		pitch -= event.relative.y * mouse_sensitivity
-		pitch = clamp(pitch, -PI / 3.0, PI / 3.0)
-		camera_node.rotation.x = pitch
+		if event is InputEventMouseMotion and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
+			_pending_yaw_delta -= event.relative.x * mouse_sensitivity
+			pitch -= event.relative.y * mouse_sensitivity
+			pitch = clamp(pitch, -PI / 3.0, PI / 3.0)
+			camera_node.rotation.x = pitch
 
 	if event is InputEventKey and event.pressed and not event.echo:
 		match event.keycode:
