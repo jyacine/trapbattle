@@ -381,39 +381,55 @@ func set_blind_overlay(overlay: ColorRect) -> void:
 # ── Viewmodel ─────────────────────────────────────────────────────────────────
 func _build_viewmodel() -> void:
 	_viewmodel_root = Node3D.new()
-	# Bottom-right of view, angled slightly inward
-	_viewmodel_root.position        = Vector3(0.24, -0.20, -0.38)
-	_viewmodel_root.rotation_degrees = Vector3(0.0, -10.0, 0.0)
+	# Held low and to the right, pointing forward — matches the FPS reference shot.
+	_viewmodel_root.position        = Vector3(0.20, -0.26, -0.42)
+	_viewmodel_root.rotation_degrees = Vector3(-4.0, -6.0, 0.0)
 	camera_node.add_child(_viewmodel_root)
 
-	var grey = StandardMaterial3D.new()
-	grey.albedo_color = Color(0.28, 0.31, 0.36)
-	grey.metallic = 0.85; grey.roughness = 0.22
+	# ── Materials ──────────────────────────────────────────────────────────────
+	# White "Handcannon" body
+	var white = StandardMaterial3D.new()
+	white.albedo_color = Color(0.93, 0.93, 0.95)
+	white.metallic = 0.30; white.roughness = 0.35
 
-	var dark = StandardMaterial3D.new()
-	dark.albedo_color = Color(0.15, 0.17, 0.20)
-	dark.metallic = 0.90; dark.roughness = 0.18
+	# Black slide / barrel / details
+	var black = StandardMaterial3D.new()
+	black.albedo_color = Color(0.09, 0.09, 0.11)
+	black.metallic = 0.55; black.roughness = 0.30
 
-	var red_mat = StandardMaterial3D.new()
-	red_mat.albedo_color = Color(0.85, 0.05, 0.05)
-	red_mat.emission_enabled = true
-	red_mat.emission = Color(1.0, 0.08, 0.08)
-	red_mat.emission_energy_multiplier = 2.5
+	# Skin tone for the hand & forearm
+	var skin = StandardMaterial3D.new()
+	skin.albedo_color = Color(0.95, 0.78, 0.62)
+	skin.metallic = 0.0; skin.roughness = 0.85
 
-	# Frame / lower receiver
-	_vm_box(Vector3(0.068, 0.052, 0.220), Vector3( 0.000,  0.000,  0.000), grey)
-	# Slide (upper, slightly narrower and taller)
-	_vm_box(Vector3(0.050, 0.040, 0.195), Vector3( 0.000,  0.046, -0.008), dark)
-	# Barrel extension past slide
-	_vm_box(Vector3(0.024, 0.024, 0.085), Vector3( 0.000,  0.026, -0.148), dark)
-	# Grip
-	_vm_box(Vector3(0.056, 0.108, 0.052), Vector3( 0.003, -0.078,  0.062), grey)
-	# Trigger guard
-	_vm_box(Vector3(0.010, 0.006, 0.050), Vector3( 0.000, -0.025,  0.008), dark)
-	# Red laser sight on left flank
-	_vm_box(Vector3(0.018, 0.020, 0.034), Vector3(-0.044, -0.005, -0.055), red_mat)
+	# ── Gun ──────────────────────────────────────────────────────────────────────
+	# Frame / lower receiver (white)
+	_vm_box(Vector3(0.070, 0.056, 0.240), Vector3( 0.000,  0.000,  0.000), white)
+	# Slide (black, sits on top)
+	_vm_box(Vector3(0.054, 0.046, 0.210), Vector3( 0.000,  0.050, -0.006), black)
+	# Front slide serration block / muzzle housing
+	_vm_box(Vector3(0.050, 0.040, 0.050), Vector3( 0.000,  0.030, -0.150), white)
+	# Barrel tip
+	_vm_box(Vector3(0.022, 0.022, 0.040), Vector3( 0.000,  0.030, -0.190), black)
+	# Rear sight nub
+	_vm_box(Vector3(0.030, 0.014, 0.022), Vector3( 0.000,  0.078,  0.090), black)
+	# Grip (white, angled back)
+	var grip = _vm_box(Vector3(0.060, 0.140, 0.060), Vector3( 0.004, -0.096,  0.080), white)
+	grip.rotation_degrees = Vector3(18.0, 0.0, 0.0)
+	# Trigger guard underside (black)
+	_vm_box(Vector3(0.012, 0.008, 0.058), Vector3( 0.000, -0.030,  0.014), black)
 
-func _vm_box(size: Vector3, pos: Vector3, mat: StandardMaterial3D) -> void:
+	# ── Hand & forearm (held the gun) ───────────────────────────────────────────
+	# Hand wrapping the grip
+	var hand = _vm_box(Vector3(0.090, 0.110, 0.090), Vector3( 0.010, -0.110,  0.090), skin)
+	hand.rotation_degrees = Vector3(18.0, 0.0, 0.0)
+	# Thumb along the left of the frame
+	_vm_box(Vector3(0.024, 0.030, 0.080), Vector3(-0.040, -0.060,  0.060), skin)
+	# Forearm receding toward the bottom-right corner of the screen
+	var arm = _vm_box(Vector3(0.130, 0.130, 0.300), Vector3( 0.060, -0.230,  0.230), skin)
+	arm.rotation_degrees = Vector3(28.0, -10.0, 6.0)
+
+func _vm_box(size: Vector3, pos: Vector3, mat: StandardMaterial3D) -> MeshInstance3D:
 	var mi := MeshInstance3D.new()
 	var bm := BoxMesh.new()
 	bm.size = size
@@ -421,6 +437,7 @@ func _vm_box(size: Vector3, pos: Vector3, mat: StandardMaterial3D) -> void:
 	mi.set_surface_override_material(0, mat)
 	mi.position = pos
 	_viewmodel_root.add_child(mi)
+	return mi
 
 func _update_viewmodel(delta: float) -> void:
 	if _viewmodel_root == null: return
@@ -436,8 +453,8 @@ func _update_viewmodel(delta: float) -> void:
 	var recoil_rot := -_vm_recoil * 6.0   # muzzle lifts on fire
 
 	_viewmodel_root.position = Vector3(
-		0.24  + idle_x,
-		-0.20 + idle_y,
-		-0.38 + recoil_z
+		0.20  + idle_x,
+		-0.26 + idle_y,
+		-0.42 + recoil_z
 	)
-	_viewmodel_root.rotation_degrees = Vector3(recoil_rot, -10.0, 0.0)
+	_viewmodel_root.rotation_degrees = Vector3(-4.0 + recoil_rot, -6.0, 0.0)
