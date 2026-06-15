@@ -79,6 +79,10 @@ func _ready() -> void:
 	var spawn_cell = game_manager.get_spawn_for_index(player_index)
 
 	if is_local:
+		# Free-floating physics movement (zero gravity, no floor) — let the engine
+		# slide us smoothly along wall colliders instead of grid axis-separation.
+		motion_mode = CharacterBody3D.MOTION_MODE_FLOATING
+		wall_min_slide_angle = 0.0
 		camera_node = Camera3D.new()
 		camera_node.position = Vector3(0, 1.6, 0)
 		add_child(camera_node)
@@ -142,22 +146,16 @@ func _physics_process(delta: float) -> void:
 		if dir.length() > 1.0:
 			dir = dir.normalized()
 
+		# Physics-driven movement: smooth wall sliding, no jitter.
+		velocity = dir * move_speed * speed_mult
+		move_and_slide()
+
 		if dir.length_squared() > 0.0001:
 			# Footstep sound
 			_footstep_timer -= delta
 			if _footstep_timer <= 0.0:
 				if sound_manager: sound_manager.play_footstep()
 				_footstep_timer = FOOTSTEP_INTERVAL / speed_mult
-
-			var movement = dir * move_speed * speed_mult * delta
-			var new_pos  = position + movement
-			if _is_walkable(new_pos):
-				position = new_pos
-			else:
-				var sx = position + Vector3(movement.x, 0, 0)
-				var sz = position + Vector3(0, 0, movement.z)
-				if   _is_walkable(sx): position = sx
-				elif _is_walkable(sz): position = sz
 		else:
 			_footstep_timer = 0.0   # reset so first step after pause is immediate
 
