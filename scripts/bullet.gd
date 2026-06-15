@@ -49,13 +49,22 @@ func _process(delta: float) -> void:
 	if local_only:
 		return
 
-	# Check all players in group except the shooter
+	# Check all players in group except the shooter.
+	# Body is treated as a vertical capsule (feet→head) so shots fired along the
+	# eye/crosshair ray connect anywhere on the body, not just at chest height.
+	const HIT_RADIUS := 0.55
+	const BODY_MIN_Y := 0.20   # above the feet
+	const BODY_MAX_Y := 1.80   # head height
 	for target in get_tree().get_nodes_in_group("players"):
 		if not is_instance_valid(target): continue
 		var target_pid = target.get("peer_id")
 		if target_pid == null or target_pid == owner_peer_id: continue
 		if game_manager.respawning.get(target_pid, false): continue
-		if position.distance_to(target.position + Vector3(0, 0.9, 0)) < 0.55:
+		var dx := position.x - target.position.x
+		var dz := position.z - target.position.z
+		var y_rel := position.y - target.position.y
+		if dx * dx + dz * dz < HIT_RADIUS * HIT_RADIUS \
+				and y_rel > BODY_MIN_Y and y_rel < BODY_MAX_Y:
 			if multiplayer.has_multiplayer_peer():
 				game_manager.net_damage.rpc(target_pid, Config.HIT_DAMAGE, owner_peer_id)
 			else:

@@ -205,14 +205,19 @@ func _fire_gun() -> void:
 	_vm_recoil    = 1.0
 	if sound_manager: sound_manager.play_gun_fire()
 
-	var spawn_pos = position + Vector3(0, 0.9, 0)
+	# Fire straight along the camera (crosshair) ray so the shot lands exactly where
+	# the player is aiming. Spawning from the eye — nudged forward past the body —
+	# keeps the bullet path identical to the aim ray at every distance.
+	var cam_origin = camera_node.global_position
+	var forward    = -camera_node.global_transform.basis.z
+	var spawn_pos  = cam_origin + forward * 0.6
+
 	var flash = OmniLight3D.new()
 	flash.light_color = Color(1.0, 0.88, 0.45); flash.light_energy = 12.0; flash.omni_range = 5.0
 	flash.position = spawn_pos; get_parent().add_child(flash)
 	get_tree().create_timer(0.07).timeout.connect(func():
 		if is_instance_valid(flash): flash.queue_free())
 
-	var forward = -camera_node.global_transform.basis.z
 	_spawn_bullet_local(spawn_pos, forward)
 
 	if multiplayer.has_multiplayer_peer():
