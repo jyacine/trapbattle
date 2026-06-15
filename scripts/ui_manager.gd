@@ -46,11 +46,22 @@ var _notif_vbox: VBoxContainer
 # ── Blind flash ───────────────────────────────────────────────────────────────
 var _blind_overlay: ColorRect
 
-# ── Mobile buttons (only built on phone/tablet) ───────────────────────────────
-var _btn_fwd:   Button
-var _btn_bwd:   Button
-var _btn_place: Button
-var _btn_fire:  Button
+# ── Mobile controls (phone / web) ─────────────────────────────────────────────
+const _JOY_R    := 80.0   # joystick physical radius in pixels
+const _JOY_DEAD := 0.15   # normalised dead-zone
+
+var _joy_id:      int     = -1
+var _joy_origin:  Vector2 = Vector2.ZERO
+var _joy_base_nd: Panel   = null
+var _joy_knob_nd: Panel   = null
+
+var _look_id:     int     = -1
+var _look_prev:   Vector2 = Vector2.ZERO
+
+var _fire_nd:     Panel   = null   # visual-only circle for FIRE
+var _trap_nd:     Panel   = null   # visual-only circle for TRAP
+var _fire_id:     int     = -1
+var _trap_id:     int     = -1
 
 # ── Crosshair ─────────────────────────────────────────────────────────────────
 var _crosshair_parts: Array = []
@@ -561,73 +572,98 @@ func _build_blind_overlay() -> void:
 	_blind_overlay.visible = false
 	add_child(_blind_overlay)
 
-# ── Mobile buttons (phone/tablet only) ───────────────────────────────────────
+# ── Mobile controls (phone / web) ────────────────────────────────────────────
 func _build_mobile_buttons() -> void:
 	if player == null: return
-	if not _is_mobile_device(): return   # ← desktop: skip entirely
+	if not (_is_mobile_device() or OS.has_feature("web")): return
 
-	var sz = 100; var mg = 16
+	const FSZ := 120.0   # fire button diameter
+	const TSZ :=  90.0   # trap button diameter
+	const MG  :=  20     # screen-edge margin
+	const BSZ := 170.0   # joystick base diameter
+	const KSZ :=  70.0   # joystick knob diameter
 
-	_btn_fwd = _mk_btn("FWD", Color(0.2, 0.6, 1.0))
-	_btn_fwd.anchor_left   = 1.0; _btn_fwd.anchor_right  = 1.0
-	_btn_fwd.anchor_top    = 1.0; _btn_fwd.anchor_bottom = 1.0
-	_btn_fwd.offset_left   = -(sz + mg); _btn_fwd.offset_right  = -mg
-	_btn_fwd.offset_top    = -350;       _btn_fwd.offset_bottom = -250
-	add_child(_btn_fwd)
+	# Joystick outer ring — shown dynamically where finger lands
+	_joy_base_nd = _circle_panel(BSZ, Color(0.12, 0.14, 0.18, 0.42), Color(0.90, 0.90, 0.90, 0.55), 3)
+	_joy_base_nd.visible = false
+	add_child(_joy_base_nd)
 
-	_btn_bwd = _mk_btn("BACK", Color(0.2, 0.6, 1.0))
-	_btn_bwd.anchor_left   = 1.0; _btn_bwd.anchor_right  = 1.0
-	_btn_bwd.anchor_top    = 1.0; _btn_bwd.anchor_bottom = 1.0
-	_btn_bwd.offset_left   = -(sz + mg); _btn_bwd.offset_right  = -mg
-	_btn_bwd.offset_top    = -230;       _btn_bwd.offset_bottom = -130
-	add_child(_btn_bwd)
+	# Joystick knob
+	_joy_knob_nd = _circle_panel(KSZ, Color(0.72, 0.74, 0.80, 0.72), Color(1.0, 1.0, 1.0, 0.88), 2)
+	_joy_knob_nd.visible = false
+	add_child(_joy_knob_nd)
 
-	_btn_place = _mk_btn("THROW\nTRAP", Color(1.0, 0.3, 0.3))
-	_btn_place.anchor_left   = 0.0; _btn_place.anchor_right  = 0.0
-	_btn_place.anchor_top    = 1.0; _btn_place.anchor_bottom = 1.0
-	_btn_place.offset_left   = mg;         _btn_place.offset_right  = mg + sz
-	_btn_place.offset_top    = -350;       _btn_place.offset_bottom = -250
-	add_child(_btn_place)
+	# FIRE button — large orange-red circle, bottom-right corner
+	_fire_nd = _action_circle(FSZ, Color(0.88, 0.22, 0.06, 0.88), "🔫\nFIRE")
+	_fire_nd.anchor_left   = 1.0; _fire_nd.anchor_right  = 1.0
+	_fire_nd.anchor_top    = 1.0; _fire_nd.anchor_bottom = 1.0
+	_fire_nd.offset_left   = -(FSZ + MG); _fire_nd.offset_right  = -MG
+	_fire_nd.offset_top    = -(FSZ + MG); _fire_nd.offset_bottom = -MG
+	add_child(_fire_nd)
 
-	_btn_fire = _mk_btn("FIRE\nGUN", Color(1.0, 0.6, 0.0))
-	_btn_fire.anchor_left   = 0.0; _btn_fire.anchor_right  = 0.0
-	_btn_fire.anchor_top    = 1.0; _btn_fire.anchor_bottom = 1.0
-	_btn_fire.offset_left   = mg;          _btn_fire.offset_right  = mg + sz
-	_btn_fire.offset_top    = -230;        _btn_fire.offset_bottom = -130
-	add_child(_btn_fire)
+	# TRAP button — blue circle, left of fire, vertically centred with it
+	_trap_nd = _action_circle(TSZ, Color(0.22, 0.44, 0.90, 0.85), "💣\nTRAP")
+	var trap_off_x := FSZ + TSZ + MG * 2 + 8
+	var trap_off_y := MG + (FSZ - TSZ) * 0.5
+	_trap_nd.anchor_left   = 1.0; _trap_nd.anchor_right  = 1.0
+	_trap_nd.anchor_top    = 1.0; _trap_nd.anchor_bottom = 1.0
+	_trap_nd.offset_left   = -trap_off_x - TSZ; _trap_nd.offset_right  = -trap_off_x
+	_trap_nd.offset_top    = -(TSZ + trap_off_y); _trap_nd.offset_bottom = -trap_off_y
+	add_child(_trap_nd)
 
-	_btn_fwd.button_down.connect(func():   player.touch_forward  = true)
-	_btn_fwd.button_up.connect(func():     player.touch_forward  = false)
-	_btn_bwd.button_down.connect(func():   player.touch_backward = true)
-	_btn_bwd.button_up.connect(func():     player.touch_backward = false)
-	_btn_place.button_down.connect(func(): player._try_place())
-	_btn_fire.button_down.connect(func():  player._fire_gun())
-
-	# Voice toggle button (mobile, multiplayer only)
+	# Voice button (multiplayer only) — above trap button
 	if multiplayer.has_multiplayer_peer():
 		var vm = get_parent().get_node_or_null("VoiceManager") as VoiceManager
 		if vm:
-			var btn_voice = _mk_btn("🎤\nON", Color(0.3, 0.8, 0.4))
+			const VSZ := 68.0
+			var btn_voice = Button.new()
+			btn_voice.text = "🎤\nON"
+			btn_voice.add_theme_font_size_override("font_size", 14)
+			btn_voice.add_theme_color_override("font_color", Color.WHITE)
+			var vsb = StyleBoxFlat.new()
+			vsb.bg_color = Color(0.20, 0.68, 0.36, 0.85)
+			vsb.border_color = Color(0.55, 1.0, 0.65, 0.90)
+			vsb.set_border_width_all(2); vsb.set_corner_radius_all(int(VSZ * 0.5))
+			btn_voice.add_theme_stylebox_override("normal", vsb)
+			btn_voice.add_theme_stylebox_override("pressed", vsb)
 			btn_voice.anchor_left   = 1.0; btn_voice.anchor_right  = 1.0
 			btn_voice.anchor_top    = 1.0; btn_voice.anchor_bottom = 1.0
-			btn_voice.offset_left   = -(sz + mg); btn_voice.offset_right  = -mg
-			btn_voice.offset_top    = -470;        btn_voice.offset_bottom = -370
+			btn_voice.offset_left   = -trap_off_x - VSZ; btn_voice.offset_right  = -trap_off_x
+			var vy_bot := trap_off_y + TSZ + 12
+			btn_voice.offset_top    = -(VSZ + vy_bot); btn_voice.offset_bottom = -vy_bot
 			add_child(btn_voice)
-			# Toggle mute on press
 			btn_voice.pressed.connect(func():
 				if vm._transmitting: vm.mute()
 				else:                vm.unmute()
 			)
 			vm.voice_button = btn_voice
 
-func _mk_btn(txt: String, col: Color) -> Button:
-	var btn = Button.new()
-	btn.text = txt; btn.add_theme_font_size_override("font_size", 16)
-	btn.add_theme_color_override("font_color", Color.WHITE)
-	var s = StyleBoxFlat.new(); s.bg_color = col.darkened(0.5); s.bg_color.a = 0.8
-	s.border_color = col; s.set_border_width_all(2); s.set_corner_radius_all(6)
-	btn.add_theme_stylebox_override("normal", s); btn.add_theme_stylebox_override("pressed", s)
-	return btn
+# Filled circle panel with a centred label child.
+func _action_circle(size: float, col: Color, label_txt: String) -> Panel:
+	var p = _circle_panel(size, col, col.lightened(0.30), 3)
+	var lbl = Label.new()
+	lbl.text = label_txt
+	lbl.add_theme_font_size_override("font_size", 14)
+	lbl.add_theme_color_override("font_color", Color.WHITE)
+	lbl.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.7))
+	lbl.add_theme_constant_override("shadow_offset_x", 1)
+	lbl.add_theme_constant_override("shadow_offset_y", 1)
+	lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	lbl.vertical_alignment   = VERTICAL_ALIGNMENT_CENTER
+	lbl.set_anchors_preset(Control.PRESET_FULL_RECT)
+	lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	p.add_child(lbl)
+	return p
+
+func _circle_panel(size: float, fill: Color, border: Color, bw: int) -> Panel:
+	var p = Panel.new()
+	p.custom_minimum_size = Vector2(size, size)
+	var sb = StyleBoxFlat.new()
+	sb.bg_color = fill; sb.border_color = border
+	sb.set_border_width_all(bw); sb.set_corner_radius_all(int(size * 0.5))
+	p.add_theme_stylebox_override("panel", sb)
+	p.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	return p
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 func _make_label(txt: String, ox: int, oy: int, sz: int, col: Color) -> Label:
@@ -699,6 +735,7 @@ func _on_peer_disconnected_notif(pid: int) -> void:
 
 # ── Input ─────────────────────────────────────────────────────────────────────
 func _input(event: InputEvent) -> void:
+	# Keyboard shortcuts (always active)
 	if event is InputEventKey and event.pressed and not event.echo:
 		if event.keycode == KEY_R:
 			get_tree().reload_current_scene()
@@ -706,3 +743,87 @@ func _input(event: InputEvent) -> void:
 			if multiplayer.has_multiplayer_peer():
 				multiplayer.multiplayer_peer.close()
 			get_tree().quit()
+
+	# Touch controls
+	if not (_is_mobile_device() or OS.has_feature("web")): return
+	if player == null or not game_manager.is_playing: return
+
+	var vp_hw: float = get_viewport().get_visible_rect().size.x * 0.5
+
+	if event is InputEventScreenTouch:
+		var pos: Vector2 = event.position
+		if event.pressed:
+			# Left half → joystick
+			if pos.x < vp_hw and _joy_id == -1:
+				_joy_id     = event.index
+				_joy_origin = pos
+				_joy_base_nd.position = pos - Vector2(_JOY_R * 1.0625, _JOY_R * 1.0625)
+				_joy_knob_nd.position = pos - Vector2(35.0, 35.0)
+				_joy_base_nd.visible  = true
+				_joy_knob_nd.visible  = true
+				get_viewport().set_input_as_handled()
+				return
+			# Right half → check action buttons first, then look
+			if pos.x >= vp_hw:
+				if _fire_nd != null and _fire_nd.get_global_rect().has_point(pos) and _fire_id == -1:
+					_fire_id = event.index
+					_fire_nd.modulate = Color(1.5, 1.5, 1.5)
+					player._fire_gun()
+					get_viewport().set_input_as_handled()
+					return
+				if _trap_nd != null and _trap_nd.get_global_rect().has_point(pos) and _trap_id == -1:
+					_trap_id = event.index
+					_trap_nd.modulate = Color(1.5, 1.5, 1.5)
+					player._try_place()
+					get_viewport().set_input_as_handled()
+					return
+				if _look_id == -1:
+					_look_id   = event.index
+					_look_prev = pos
+					get_viewport().set_input_as_handled()
+					return
+		else:
+			if event.index == _joy_id:
+				_joy_id = -1
+				player.touch_forward  = false
+				player.touch_backward = false
+				player.touch_turn     = 0.0
+				_joy_base_nd.visible  = false
+				_joy_knob_nd.visible  = false
+				get_viewport().set_input_as_handled()
+			elif event.index == _look_id:
+				_look_id = -1
+				get_viewport().set_input_as_handled()
+			elif event.index == _fire_id:
+				_fire_id = -1
+				if _fire_nd: _fire_nd.modulate = Color(1, 1, 1)
+				get_viewport().set_input_as_handled()
+			elif event.index == _trap_id:
+				_trap_id = -1
+				if _trap_nd: _trap_nd.modulate = Color(1, 1, 1)
+				get_viewport().set_input_as_handled()
+
+	elif event is InputEventScreenDrag:
+		if event.index == _joy_id:
+			var delta_v  := event.position - _joy_origin
+			var dist     := delta_v.length()
+			var norm     := delta_v / max(dist, 1.0)
+			var clamped  := min(dist, _JOY_R)
+			_joy_knob_nd.position = _joy_origin + norm * clamped - Vector2(35.0, 35.0)
+			var strength := min(dist / _JOY_R, 1.0)
+			if strength > _JOY_DEAD:
+				player.touch_forward  = norm.y < -_JOY_DEAD
+				player.touch_backward = norm.y >  _JOY_DEAD
+				player.touch_turn     = norm.x * strength
+			else:
+				player.touch_forward  = false
+				player.touch_backward = false
+				player.touch_turn     = 0.0
+			get_viewport().set_input_as_handled()
+		elif event.index == _look_id:
+			var sens := player.mouse_sensitivity * 1.8
+			player._pending_yaw_delta -= event.relative.x * sens
+			player.pitch = clamp(player.pitch - event.relative.y * sens, -PI / 3.0, PI / 3.0)
+			if player.camera_node:
+				player.camera_node.rotation.x = player.pitch
+			get_viewport().set_input_as_handled()

@@ -45,10 +45,9 @@ var _footstep_timer:   float = 0.0
 const FOOTSTEP_INTERVAL := 0.42   # seconds between steps
 
 # ── Touch input ───────────────────────────────────────────────────────────────
-var touch_forward:    bool  = false
-var touch_backward:   bool  = false
-var _touch_turn_id:   int   = -1
-var _touch_turn_prev: Vector2 = Vector2.ZERO
+var touch_forward:  bool  = false
+var touch_backward: bool  = false
+var touch_turn:     float = 0.0   # joystick X: -1 (left) .. +1 (right)
 
 # ── Multiplayer ───────────────────────────────────────────────────────────────
 var is_local: bool = true
@@ -115,6 +114,7 @@ func _physics_process(delta: float) -> void:
 	var turn_dir = 0.0
 	if Input.is_key_pressed(KEY_Q): turn_dir -= rotation_speed * delta
 	if Input.is_key_pressed(KEY_E): turn_dir += rotation_speed * delta
+	turn_dir += touch_turn * rotation_speed * delta
 	if is_confused: turn_dir = -turn_dir
 	yaw += turn_dir
 	rotation.y = yaw
@@ -177,22 +177,6 @@ func _input(event: InputEvent) -> void:
 		pitch -= event.relative.y * mouse_sensitivity
 		pitch = clamp(pitch, -PI / 3.0, PI / 3.0)
 		camera_node.rotation.x = pitch
-
-	if event is InputEventScreenTouch:
-		var half_w = get_viewport().get_visible_rect().size.x / 2.0
-		if event.position.x < half_w:
-			if event.pressed:
-				_touch_turn_id   = event.index
-				_touch_turn_prev = event.position
-			elif event.index == _touch_turn_id:
-				_touch_turn_id = -1
-
-	if event is InputEventScreenDrag and event.index == _touch_turn_id:
-		var half_w = get_viewport().get_visible_rect().size.x / 2.0
-		if event.position.x < half_w:
-			var dx = (event.position.x - _touch_turn_prev.x) * mouse_sensitivity * 2.0
-			_touch_turn_prev = event.position
-			_pending_yaw_delta -= dx
 
 	if event is InputEventKey and event.pressed and not event.echo:
 		match event.keycode:
