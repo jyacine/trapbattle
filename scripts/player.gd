@@ -44,10 +44,9 @@ var current_grid_pos: Array = [0, 0]
 var _footstep_timer:   float = 0.0
 const FOOTSTEP_INTERVAL := 0.42   # seconds between steps
 
-# ── Touch input ───────────────────────────────────────────────────────────────
-var touch_forward:  bool  = false
-var touch_backward: bool  = false
-var touch_turn:     float = 0.0   # joystick X: -1 (left) .. +1 (right)
+# ── Touch input (left joystick = strafe/move, relative to facing) ─────────────
+var touch_move_x: float = 0.0   # strafe: -1 (left)  .. +1 (right)
+var touch_move_y: float = 0.0   # drive:  -1 (back)  .. +1 (forward)
 
 # ── Multiplayer ───────────────────────────────────────────────────────────────
 var is_local: bool = true
@@ -111,10 +110,10 @@ func _physics_process(delta: float) -> void:
 		return
 
 	var is_confused = game_manager.has_effect(peer_id, "confusion")
+	# Turning is keyboard (Q/E) + right-screen look-drag only — never the joystick.
 	var turn_dir = 0.0
 	if Input.is_key_pressed(KEY_Q): turn_dir -= rotation_speed * delta
 	if Input.is_key_pressed(KEY_E): turn_dir += rotation_speed * delta
-	turn_dir += touch_turn * rotation_speed * delta
 	if is_confused: turn_dir = -turn_dir
 	yaw += turn_dir
 	rotation.y = yaw
@@ -125,19 +124,32 @@ func _physics_process(delta: float) -> void:
 
 	if can_move:
 		var speed_mult = 0.25 if game_manager.has_effect(peer_id, "freeze") else 1.0
-		var move = 0.0
-		if Input.is_action_pressed("ui_up")  or Input.is_key_pressed(KEY_W) or touch_forward:  move += 1.0
-		if Input.is_action_pressed("ui_down") or Input.is_key_pressed(KEY_S) or touch_backward: move -= 1.0
-		if is_confused: move = -move
-		if move != 0.0:
+
+		# Build a move vector relative to facing: Y = forward/back, X = strafe.
+		var drive  := 0.0
+		var strafe := 0.0
+		if Input.is_action_pressed("ui_up")   or Input.is_key_pressed(KEY_W): drive  += 1.0
+		if Input.is_action_pressed("ui_down") or Input.is_key_pressed(KEY_S): drive  -= 1.0
+		drive  += touch_move_y
+		strafe += touch_move_x
+		if is_confused:
+			drive  = -drive
+			strafe = -strafe
+
+		var forward := Vector3(-sin(yaw), 0.0, -cos(yaw))
+		var right   := Vector3( cos(yaw), 0.0, -sin(yaw))
+		var dir     := forward * drive + right * strafe
+		if dir.length() > 1.0:
+			dir = dir.normalized()
+
+		if dir.length_squared() > 0.0001:
 			# Footstep sound
 			_footstep_timer -= delta
 			if _footstep_timer <= 0.0:
 				if sound_manager: sound_manager.play_footstep()
 				_footstep_timer = FOOTSTEP_INTERVAL / speed_mult
 
-			var forward  = Vector3(-sin(yaw), 0.0, -cos(yaw))
-			var movement = forward * move * move_speed * speed_mult * delta
+			var movement = dir * move_speed * speed_mult * delta
 			var new_pos  = position + movement
 			if _is_walkable(new_pos):
 				position = new_pos

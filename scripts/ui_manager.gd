@@ -47,8 +47,11 @@ var _notif_vbox: VBoxContainer
 var _blind_overlay: ColorRect
 
 # ── Mobile controls (phone / web) ─────────────────────────────────────────────
-const _JOY_R    := 80.0   # joystick physical radius in pixels
-const _JOY_DEAD := 0.15   # normalised dead-zone
+const _JOY_BASE := 170.0  # joystick ring diameter
+const _JOY_KNOB := 70.0   # joystick knob diameter
+const _JOY_R    := 70.0   # max knob travel from centre, in pixels
+const _JOY_DEAD := 0.18   # normalised dead-zone
+const _JOY_MG   := 28     # joystick distance from screen corner
 
 var _joy_id:      int     = -1
 var _joy_origin:  Vector2 = Vector2.ZERO
@@ -123,6 +126,9 @@ func _process(_delta: float) -> void:
 	_update_player_hud()
 	_update_minimap()
 	_update_crosshair()
+	# Keep the joystick knob parked at the ring centre while idle (also handles resize).
+	if _joy_base_nd != null and _joy_id == -1:
+		_recenter_knob()
 	if not game_manager.is_playing:
 		_show_overlay()
 
@@ -580,17 +586,17 @@ func _build_mobile_buttons() -> void:
 	const FSZ := 120.0   # fire button diameter
 	const TSZ :=  90.0   # trap button diameter
 	const MG  :=  20     # screen-edge margin
-	const BSZ := 170.0   # joystick base diameter
-	const KSZ :=  70.0   # joystick knob diameter
 
-	# Joystick outer ring — shown dynamically where finger lands
-	_joy_base_nd = _circle_panel(BSZ, Color(0.12, 0.14, 0.18, 0.42), Color(0.90, 0.90, 0.90, 0.55), 3)
-	_joy_base_nd.visible = false
+	# Joystick outer ring — fixed at bottom-left, always visible
+	_joy_base_nd = _circle_panel(_JOY_BASE, Color(0.12, 0.14, 0.18, 0.42), Color(0.90, 0.90, 0.90, 0.55), 3)
+	_joy_base_nd.anchor_left   = 0.0; _joy_base_nd.anchor_right  = 0.0
+	_joy_base_nd.anchor_top    = 1.0; _joy_base_nd.anchor_bottom = 1.0
+	_joy_base_nd.offset_left   = _JOY_MG;            _joy_base_nd.offset_right  = _JOY_MG + _JOY_BASE
+	_joy_base_nd.offset_top    = -(_JOY_MG + _JOY_BASE); _joy_base_nd.offset_bottom = -_JOY_MG
 	add_child(_joy_base_nd)
 
-	# Joystick knob
-	_joy_knob_nd = _circle_panel(KSZ, Color(0.72, 0.74, 0.80, 0.72), Color(1.0, 1.0, 1.0, 0.88), 2)
-	_joy_knob_nd.visible = false
+	# Joystick knob — positioned absolutely (recentred each idle frame)
+	_joy_knob_nd = _circle_panel(_JOY_KNOB, Color(0.72, 0.74, 0.80, 0.72), Color(1.0, 1.0, 1.0, 0.88), 2)
 	add_child(_joy_knob_nd)
 
 	# FIRE button — large orange-red circle, bottom-right corner
@@ -753,14 +759,10 @@ func _input(event: InputEvent) -> void:
 	if event is InputEventScreenTouch:
 		var pos: Vector2 = event.position
 		if event.pressed:
-			# Left half → joystick
+			# Left half → joystick (origin is the fixed ring centre)
 			if pos.x < vp_hw and _joy_id == -1:
-				_joy_id     = event.index
-				_joy_origin = pos
-				_joy_base_nd.position = pos - Vector2(_JOY_R * 1.0625, _JOY_R * 1.0625)
-				_joy_knob_nd.position = pos - Vector2(35.0, 35.0)
-				_joy_base_nd.visible  = true
-				_joy_knob_nd.visible  = true
+				_joy_id = event.index
+				_joy_update(pos)
 				get_viewport().set_input_as_handled()
 				return
 			# Right half → check action buttons first, then look
@@ -785,11 +787,9 @@ func _input(event: InputEvent) -> void:
 		else:
 			if event.index == _joy_id:
 				_joy_id = -1
-				player.touch_forward  = false
-				player.touch_backward = false
-				player.touch_turn     = 0.0
-				_joy_base_nd.visible  = false
-				_joy_knob_nd.visible  = false
+				player.touch_move_x = 0.0
+				player.touch_move_y = 0.0
+				_recenter_knob()
 				get_viewport().set_input_as_handled()
 			elif event.index == _look_id:
 				_look_id = -1
@@ -804,26 +804,38 @@ func _input(event: InputEvent) -> void:
 				get_viewport().set_input_as_handled()
 
 	elif event is InputEventScreenDrag:
+		var drag := event as InputEventScreenDrag
 		if event.index == _joy_id:
-			var delta_v  := event.position - _joy_origin
-			var dist     := delta_v.length()
-			var norm     := delta_v / max(dist, 1.0)
-			var clamped  := min(dist, _JOY_R)
-			_joy_knob_nd.position = _joy_origin + norm * clamped - Vector2(35.0, 35.0)
-			var strength := min(dist / _JOY_R, 1.0)
-			if strength > _JOY_DEAD:
-				player.touch_forward  = norm.y < -_JOY_DEAD
-				player.touch_backward = norm.y >  _JOY_DEAD
-				player.touch_turn     = norm.x * strength
-			else:
-				player.touch_forward  = false
-				player.touch_backward = false
-				player.touch_turn     = 0.0
+			_joy_update(drag.position)
 			get_viewport().set_input_as_handled()
 		elif event.index == _look_id:
-			var sens := player.mouse_sensitivity * 1.8
-			player._pending_yaw_delta -= event.relative.x * sens
-			player.pitch = clamp(player.pitch - event.relative.y * sens, -PI / 3.0, PI / 3.0)
+			var sens: float = player.mouse_sensitivity * 1.8
+			player._pending_yaw_delta -= drag.relative.x * sens
+			player.pitch = clamp(player.pitch - drag.relative.y * sens, -PI / 3.0, PI / 3.0)
 			if player.camera_node:
 				player.camera_node.rotation.x = player.pitch
 			get_viewport().set_input_as_handled()
+
+# Move the knob toward `pos` (clamped to ring) and update the strafe vector.
+func _joy_update(pos: Vector2) -> void:
+	if _joy_base_nd == null or player == null: return
+	var centre:  Vector2 = _joy_base_nd.get_global_rect().get_center()
+	var delta_v: Vector2 = pos - centre
+	var dist:    float   = delta_v.length()
+	var norm:    Vector2 = delta_v / maxf(dist, 1.0)
+	var clamped: float   = minf(dist, _JOY_R)
+	_joy_knob_nd.position = centre + norm * clamped - Vector2(_JOY_KNOB * 0.5, _JOY_KNOB * 0.5)
+
+	var strength: float = minf(dist / _JOY_R, 1.0)
+	if strength > _JOY_DEAD:
+		player.touch_move_x =  norm.x * strength   # +x = strafe right
+		player.touch_move_y = -norm.y * strength   # screen y is down → invert for forward
+	else:
+		player.touch_move_x = 0.0
+		player.touch_move_y = 0.0
+
+# Snap the knob back to the centre of the ring.
+func _recenter_knob() -> void:
+	if _joy_base_nd == null or _joy_knob_nd == null: return
+	var centre: Vector2 = _joy_base_nd.get_global_rect().get_center()
+	_joy_knob_nd.position = centre - Vector2(_JOY_KNOB * 0.5, _JOY_KNOB * 0.5)
