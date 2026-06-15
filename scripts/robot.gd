@@ -2,6 +2,10 @@
 
 class_name Robot
 
+# ── Identity (used by bullet hit-detection via "players" group) ───────────────
+var peer_id:      int = 0   # sentinel: 0 = robot AI in SP
+var player_index: int = 1
+
 # ── References ────────────────────────────────────────────────────────────────
 var game_manager: GameManager
 var player: Player
@@ -41,6 +45,7 @@ const ROBOT_GUN_RANGE = 20.0
 
 # ────────────────────────────────────────────────────────────────────────────
 func _ready() -> void:
+	add_to_group("players")
 	var root  = get_parent()
 	game_manager = root.get_node("GameManager")
 	player       = root.get_node("Player")
@@ -146,7 +151,7 @@ func _physics_process(delta: float) -> void:
 	# ── Place trap ────────────────────────────────────────────────────────
 	if state == "place" and held_trap >= 0 and _place_cooldown <= 0.0:
 		# Place slightly ahead of player's path
-		trap_manager.place_trap(current_grid_pos, "robot", held_trap)
+		trap_manager.place_trap(current_grid_pos, peer_id, held_trap)
 		held_trap = -1
 		_place_cooldown = 3.0
 
@@ -190,11 +195,10 @@ func _fire_at_player() -> void:
 	var target_pos = player.position + Vector3(0, 0.9, 0)
 	var dir = (target_pos - spawn_pos).normalized()
 	var b = Bullet.new()
-	b.owner_tag     = "robot"
+	b.owner_peer_id = peer_id         # 0 = robot AI
+	b.owner_index   = player_index    # 1 = second color slot
 	b.direction     = dir
 	b.game_manager  = game_manager
-	b.player_ref    = player
-	b.robot_ref     = self
 	b.sound_manager = sound_manager
 	b.position      = spawn_pos
 	get_parent().add_child(b)
@@ -215,7 +219,19 @@ func _is_valid_pos(pos: Vector3) -> bool:
 	var cs = Config.CELL_SIZE
 	var gx = int(pos.x / cs)
 	var gz = int(pos.z / cs)
-	return game_manager.is_floor(gx, gz)
+	if not game_manager.is_floor(gx, gz): return false
+
+	# Collision with other bodies (players and other robots)
+	var combined_sq = (ROBOT_RADIUS + Config.PLAYER_RADIUS) * (ROBOT_RADIUS + Config.PLAYER_RADIUS)
+	for other in get_tree().get_nodes_in_group("players"):
+		if other == self or not is_instance_valid(other): continue
+		var other_pid = other.get("peer_id")
+		if other_pid != null and game_manager.respawning.get(other_pid, false): continue
+		var dx = pos.x - other.position.x
+		var dz = pos.z - other.position.z
+		if dx * dx + dz * dz < combined_sq: return false
+
+	return true
 
 func _teleport_to(cell: Array) -> void:
 	position = game_manager.grid_to_world(cell)

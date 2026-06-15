@@ -1,4 +1,9 @@
-extends Node
+﻿extends Node
+
+# Multiplayer: maze seed shared by host; 0 = random
+var maze_seed: int = 0
+
+
 
 # ── Map / Level selection (set from menu or directly) ──────────────────────
 # selected_map: 1 = Dungeon (brick/stone), 2 = Ice Cave (ice/frost)
@@ -11,8 +16,25 @@ const MAZE_ROWS       = 27
 const EXTRA_PASSAGES  = 60
 const CELL_SIZE       = 2.0   # world units per grid cell
 
+# ── Multiplayer ─────────────────────────────────────────────────────────────
+const MAX_PLAYERS = 10
+
+const PLAYER_COLORS: Array = [
+	Color(0.20, 0.85, 1.00),   # 0 cyan
+	Color(1.00, 0.30, 0.30),   # 1 red
+	Color(0.30, 1.00, 0.35),   # 2 green
+	Color(1.00, 0.90, 0.15),   # 3 yellow
+	Color(0.75, 0.30, 1.00),   # 4 purple
+	Color(1.00, 0.50, 0.05),   # 5 orange
+	Color(0.00, 0.95, 0.75),   # 6 teal
+	Color(1.00, 0.40, 0.85),   # 7 pink
+	Color(0.55, 0.95, 0.05),   # 8 lime
+	Color(0.95, 0.78, 0.55),   # 9 sand
+]
+
 # ── HP ──────────────────────────────────────────────────────────────────────
-const MAX_HP = 100
+const MAX_HP     = 100
+const HIT_DAMAGE = 15
 
 # ── Player ──────────────────────────────────────────────────────────────────
 const PLAYER_SPEED            = 3.2

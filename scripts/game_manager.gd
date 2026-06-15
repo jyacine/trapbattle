@@ -2,142 +2,200 @@ extends Node
 
 class_name GameManager
 
+signal player_damaged(victim_pid: int, attacker_pid: int, amount: int)
+
 # ── Maze data ───────────────────────────────────────────────────────────────
-var grid: Array          # 2D array: 0=floor 1=wall
-var player_start: Array  # [col, row]
-var robot_start: Array
-var box_spawns: Array    # Array of [col, row]
+var grid: Array
+var spawns: Array        # Array of [col, row] — up to MAX_PLAYERS spawn points
+var player_start: Array  # spawns[0] — backward compat
+var robot_start: Array   # spawns[1] — backward compat
+var box_spawns: Array
 
-# ── Score / lives ────────────────────────────────────────────────────────────
-var player_kills: int = 0
-var robot_kills:  int = 0
-var player_lives: int = Config.PLAYER_LIVES
-var robot_lives:  int = Config.ROBOT_LIVES
+# ── Per-player state (keyed by peer_id) ─────────────────────────────────────
+var player_ids: Array      = []   # ordered list, index = player_index
+var hp:         Dictionary = {}
+var lives:      Dictionary = {}
+var kills:      Dictionary = {}
+var effects:    Dictionary = {}   # peer_id -> {effect_name: timer}
+var respawning: Dictionary = {}
+var _respawn_timers: Dictionary = {}
+var _last_damager:   Dictionary = {}   # victim_pid -> attacker_pid
 
-# ── HP ───────────────────────────────────────────────────────────────────────
-var player_hp: int = Config.MAX_HP
-var robot_hp:  int = Config.MAX_HP
-
-# ── State ────────────────────────────────────────────────────────────────────
-var is_playing: bool = true
-var winner: String = ""   # "player" | "robot" | ""
-
-# ── Active effects on player / robot ────────────────────────────────────────
-# Dictionary: effect_name (String) -> time_remaining (float)
-# Effect names: "freeze", "confusion", "glue", "cage", "poison", "blind",
-#               "electric", "mirror"
-var player_effects: Dictionary = {}
-var robot_effects:  Dictionary = {}
-
-# ── Respawn flags (set by TrapManager, cleared by player/robot on _ready) ───
-var player_respawning: bool = false
-var robot_respawning:  bool = false
-var player_respawn_timer: float = 0.0
-var robot_respawn_timer:  float = 0.0
 const RESPAWN_DELAY = 2.0
+
+# ── Game state ───────────────────────────────────────────────────────────────
+var is_playing: bool = true
+var winner_pid: int  = -1   # peer_id of winner; -1 = no winner yet
+
+# ── Backward-compat read-only props (SP: player=pid 1, robot=pid 0) ──────────
+var player_hp: int:
+	get: return hp.get(1, Config.MAX_HP)
+var robot_hp: int:
+	get: return hp.get(0, Config.MAX_HP)
+var player_lives: int:
+	get: return lives.get(1, Config.PLAYER_LIVES)
+var robot_lives: int:
+	get: return lives.get(0, Config.PLAYER_LIVES)
+var player_kills: int:
+	get: return kills.get(1, 0)
+var robot_kills: int:
+	get: return kills.get(0, 0)
+var player_respawning: bool:
+	get: return respawning.get(1, false)
+var robot_respawning: bool:
+	get: return respawning.get(0, false)
+var player_effects: Dictionary:
+	get: return effects.get(1, {})
+var robot_effects: Dictionary:
+	get: return effects.get(0, {})
+var winner: String:
+	get:
+		if winner_pid == 1:  return "player"
+		if winner_pid == 0:  return "robot"
+		if winner_pid != -1: return "player_%d" % winner_pid
+		return ""
 
 # ── Floor cells cache ────────────────────────────────────────────────────────
 var _floor_cells: Array = []
 
 # ────────────────────────────────────────────────────────────────────────────
 func _init() -> void:
-	var gen = MazeGenerator.new()
-	grid = gen.generate_maze(Config.MAZE_COLS, Config.MAZE_ROWS, Config.EXTRA_PASSAGES)
-	var spawns = gen.pick_spawns(grid)
-	player_start = spawns["player"]
-	robot_start  = spawns["robot"]
-	box_spawns   = spawns["boxes"]
+	if Config.maze_seed != 0:
+		seed(Config.maze_seed)
 
-	# Pre-cache floor cells
+	var gen  = MazeGenerator.new()
+	grid     = gen.generate_maze(Config.MAZE_COLS, Config.MAZE_ROWS, Config.EXTRA_PASSAGES)
+	var data = gen.pick_spawns(grid, Config.MAX_PLAYERS)
+	spawns      = data["spawns"]
+	player_start = spawns[0] if spawns.size() > 0 else [1, 1]
+	robot_start  = spawns[1] if spawns.size() > 1 else player_start
+	box_spawns   = data["boxes"]
+
 	for r in range(grid.size()):
 		for c in range(grid[r].size()):
 			if grid[r][c] == 0:
 				_floor_cells.append([c, r])
 
+# ── Register a player (call once per peer after spawning) ────────────────────
+func register_player(pid: int) -> void:
+	if pid in player_ids:
+		return
+	player_ids.append(pid)
+	hp[pid]              = Config.MAX_HP
+	lives[pid]           = Config.PLAYER_LIVES
+	kills[pid]           = 0
+	effects[pid]         = {}
+	respawning[pid]      = false
+	_respawn_timers[pid] = 0.0
+
 # ────────────────────────────────────────────────────────────────────────────
 func _process(delta: float) -> void:
 	if not is_playing:
 		return
+	for pid in player_ids:
+		_tick_effects(effects.get(pid, {}), delta)
+		if respawning.get(pid, false):
+			_respawn_timers[pid] -= delta
+			if _respawn_timers[pid] <= 0.0:
+				respawning[pid] = false
 
-	# Tick down all active effects
-	_tick_effects(player_effects, delta)
-	_tick_effects(robot_effects, delta)
-
-	# Respawn timers
-	if player_respawning:
-		player_respawn_timer -= delta
-		if player_respawn_timer <= 0.0:
-			player_respawning = false
-
-	if robot_respawning:
-		robot_respawn_timer -= delta
-		if robot_respawn_timer <= 0.0:
-			robot_respawning = false
-
-# ────────────────────────────────────────────────────────────────────────────
-func _tick_effects(effects: Dictionary, delta: float) -> void:
-	var to_remove = []
-	for key in effects.keys():
-		effects[key] -= delta
-		if effects[key] <= 0.0:
+func _tick_effects(eff: Dictionary, delta: float) -> void:
+	var to_remove: Array = []
+	for key in eff.keys():
+		eff[key] -= delta
+		if eff[key] <= 0.0:
 			to_remove.append(key)
 	for key in to_remove:
-		effects.erase(key)
+		eff.erase(key)
+
+# ── Damage ───────────────────────────────────────────────────────────────────
+func damage_player(victim_pid: int, amount: int, attacker_pid: int = -1) -> void:
+	if not hp.has(victim_pid): return
+	if respawning.get(victim_pid, false): return
+	if attacker_pid != -1:
+		_last_damager[victim_pid] = attacker_pid
+	hp[victim_pid] = max(0, hp[victim_pid] - amount)
+	player_damaged.emit(victim_pid, attacker_pid, amount)
+	if hp[victim_pid] == 0:
+		_player_died(victim_pid)
+
+## Replicated damage — any peer calls; runs on all peers (call_local).
+@rpc("any_peer", "call_local", "reliable")
+func net_damage(victim_pid: int, amount: int, attacker_pid: int = -1) -> void:
+	damage_player(victim_pid, amount, attacker_pid)
+
+## Backward-compat for TrapManager and Robot which still use string targets.
+func damage_target(target, amount: int) -> void:
+	damage_player(_to_pid(target), amount)
+
+## Public entry-point so external callers (e.g. on peer disconnect) can
+## re-evaluate the win condition without going through a damage event.
+func check_win_condition() -> void:
+	if is_playing:
+		_check_win()
+
+## Spawn a visual-only bullet on the remote peers.
+@rpc("any_peer", "call_remote", "reliable")
+func net_spawn_bullet(pos: Vector3, dir: Vector3, owner_pid: int, owner_idx: int) -> void:
+	var root = get_parent()
+	var b = Bullet.new()
+	b.local_only    = true
+	b.owner_peer_id = owner_pid
+	b.owner_index   = owner_idx
+	b.direction     = dir
+	b.game_manager  = self
+	b.sound_manager = root.get_node_or_null("SoundManager")
+	b.position      = pos
+	root.add_child(b)
 
 # ────────────────────────────────────────────────────────────────────────────
-## Deals HP damage; triggers death when HP reaches 0.
-func damage_target(target: String, amount: int) -> void:
-	if target == "player":
-		if player_respawning: return
-		player_hp = max(0, player_hp - amount)
-		if player_hp == 0:
-			player_hp = Config.MAX_HP
-			player_died()
-	else:
-		if robot_respawning: return
-		robot_hp = max(0, robot_hp - amount)
-		if robot_hp == 0:
-			robot_hp = Config.MAX_HP
-			robot_died()
+func _player_died(pid: int) -> void:
+	lives[pid] = max(0, lives[pid] - 1)
+	hp[pid]    = Config.MAX_HP
+	effects[pid].clear()
+	respawning[pid]      = true
+	_respawn_timers[pid] = RESPAWN_DELAY
 
-func player_died() -> void:
-	player_lives -= 1
-	robot_kills  += 1
-	player_hp    = Config.MAX_HP
-	player_effects.clear()
-	player_respawning    = true
-	player_respawn_timer = RESPAWN_DELAY
-	_check_win()
+	var killer = _last_damager.get(pid, -1)
+	if killer != -1 and kills.has(killer):
+		kills[killer] += 1
 
-func robot_died() -> void:
-	robot_lives  -= 1
-	player_kills += 1
-	robot_hp     = Config.MAX_HP
-	robot_effects.clear()
-	robot_respawning    = true
-	robot_respawn_timer = RESPAWN_DELAY
 	_check_win()
 
 func _check_win() -> void:
-	if player_kills >= Config.KILLS_TO_WIN:
-		winner     = "player"
+	for pid in player_ids:
+		if kills.get(pid, 0) >= Config.KILLS_TO_WIN:
+			winner_pid = pid; is_playing = false; return
+
+	var alive: Array = []
+	for pid in player_ids:
+		if lives.get(pid, 0) > 0:
+			alive.append(pid)
+	if alive.size() == 1:
+		winner_pid = alive[0]; is_playing = false
+	elif alive.size() == 0:
 		is_playing = false
-	elif robot_kills >= Config.KILLS_TO_WIN:
-		winner     = "robot"
-		is_playing = false
-	elif player_lives <= 0:
-		winner     = "robot"
-		is_playing = false
-	elif robot_lives <= 0:
-		winner     = "player"
-		is_playing = false
+
+# ── Effects ──────────────────────────────────────────────────────────────────
+func has_effect(target, effect: String) -> bool:
+	return effects.get(_to_pid(target), {}).has(effect)
+
+func add_effect(target, effect: String, duration: float) -> void:
+	var pid = _to_pid(target)
+	if effects.has(pid):
+		effects[pid][effect] = duration
+
+func _to_pid(target) -> int:
+	if target is String:
+		return 1 if target == "player" else 0
+	return int(target)
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 func get_random_floor_cell() -> Array:
 	return _floor_cells[randi() % _floor_cells.size()]
 
 func get_random_far_floor_cell(from: Array, min_dist: float) -> Array:
-	var cands = []
+	var cands: Array = []
 	for cell in _floor_cells:
 		var d = sqrt(float((cell[0]-from[0])*(cell[0]-from[0]) + (cell[1]-from[1])*(cell[1]-from[1])))
 		if d >= min_dist:
@@ -146,16 +204,10 @@ func get_random_far_floor_cell(from: Array, min_dist: float) -> Array:
 		return get_random_floor_cell()
 	return cands[randi() % cands.size()]
 
-func has_effect(target: String, effect: String) -> bool:
-	if target == "player":
-		return player_effects.has(effect)
-	return robot_effects.has(effect)
-
-func add_effect(target: String, effect: String, duration: float) -> void:
-	if target == "player":
-		player_effects[effect] = duration
-	else:
-		robot_effects[effect] = duration
+func get_spawn_for_index(idx: int) -> Array:
+	if idx < spawns.size():
+		return spawns[idx]
+	return get_random_floor_cell()
 
 func grid_to_world(cell: Array) -> Vector3:
 	var cs = Config.CELL_SIZE
