@@ -218,7 +218,7 @@ func _fire_gun() -> void:
 	get_tree().create_timer(0.07).timeout.connect(func():
 		if is_instance_valid(flash): flash.queue_free())
 
-	var forward = Vector3(-sin(yaw), 0.0, -cos(yaw))
+	var forward = -camera_node.global_transform.basis.z
 	_spawn_bullet_local(spawn_pos, forward)
 
 	if multiplayer.has_multiplayer_peer():
