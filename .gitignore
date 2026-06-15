@@ -3,6 +3,9 @@
 *.import
 export_presets.cfg
 
+# Build output
+export/
+
 # OS
 .DS_Store
 Thumbs.db

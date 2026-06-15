@@ -40,6 +40,10 @@ var _blind_overlay: ColorRect
 # ── Current grid pos ─────────────────────────────────────────────────────────
 var current_grid_pos: Array = [0, 0]
 
+# ── Footstep audio ────────────────────────────────────────────────────────────
+var _footstep_timer:   float = 0.0
+const FOOTSTEP_INTERVAL := 0.42   # seconds between steps
+
 # ── Touch input ───────────────────────────────────────────────────────────────
 var touch_forward:    bool  = false
 var touch_backward:   bool  = false
@@ -120,6 +124,12 @@ func _physics_process(delta: float) -> void:
 		if Input.is_action_pressed("ui_down") or Input.is_key_pressed(KEY_S) or touch_backward: move -= 1.0
 		if is_confused: move = -move
 		if move != 0.0:
+			# Footstep sound
+			_footstep_timer -= delta
+			if _footstep_timer <= 0.0:
+				if sound_manager: sound_manager.play_footstep()
+				_footstep_timer = FOOTSTEP_INTERVAL / speed_mult
+
 			var forward  = Vector3(-sin(yaw), 0.0, -cos(yaw))
 			var movement = forward * move * move_speed * speed_mult * delta
 			var new_pos  = position + movement
@@ -130,6 +140,8 @@ func _physics_process(delta: float) -> void:
 				var sz = position + Vector3(0, 0, movement.z)
 				if   _is_walkable(sx): position = sx
 				elif _is_walkable(sz): position = sz
+		else:
+			_footstep_timer = 0.0   # reset so first step after pause is immediate
 
 	current_grid_pos = game_manager.world_to_grid(position)
 	_try_pickup()
@@ -246,7 +258,10 @@ func _try_pickup() -> void:
 @rpc("authority", "unreliable")
 func _net_pos(pos: Vector3, y: float) -> void:
 	if is_multiplayer_authority(): return
-	position = pos; yaw = y; rotation.y = yaw
+	position         = pos
+	yaw              = y
+	rotation.y       = yaw
+	current_grid_pos = game_manager.world_to_grid(pos)   # keep grid pos in sync
 
 # ── Remote body ───────────────────────────────────────────────────────────────
 func _build_remote_body() -> void:
@@ -351,6 +366,10 @@ func _teleport_to(cell: Array) -> void:
 	position = game_manager.grid_to_world(cell); current_grid_pos = cell.duplicate()
 
 func get_grid_position() -> Array:
+	# Compute from actual world position so remote players show correctly on the minimap.
+	# current_grid_pos is still kept as a cached value for local-player trap detection.
+	if game_manager != null:
+		return game_manager.world_to_grid(position)
 	return current_grid_pos
 
 func set_blind_overlay(overlay: ColorRect) -> void:

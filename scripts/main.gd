@@ -1,9 +1,10 @@
 extends Node3D
 
-var game_manager: GameManager
-var trap_manager: TrapManager
-var sound_manager: SoundManager
+var game_manager:   GameManager
+var trap_manager:   TrapManager
+var sound_manager:  SoundManager
 var network_manager: NetworkManager
+var voice_manager:  VoiceManager
 
 # peer_id -> player node (Player or Robot)
 var _players: Dictionary = {}
@@ -14,6 +15,7 @@ func _ready() -> void:
 	network_manager.name = "NetworkManager"
 	add_child(network_manager)
 	network_manager.peer_left.connect(_on_peer_left)
+	network_manager.player_joined_mid_game.connect(_on_player_joined_mid_game)
 
 	var lobby = LobbyUI.new()
 	lobby.name = "LobbyUI"
@@ -57,6 +59,12 @@ func _on_start_game(seed_val: int, is_mp: bool) -> void:
 
 	_create_lighting()
 	_create_ui()
+
+	# Voice chat — only in multiplayer
+	if is_mp:
+		voice_manager = VoiceManager.new()
+		voice_manager.name = "VoiceManager"
+		add_child(voice_manager)
 
 # ── Single-player: human Player + Robot AI ────────────────────────────────────
 func _spawn_sp_players() -> void:
@@ -220,6 +228,24 @@ func _create_lighting() -> void:
 	add_child(dir_light)
 	world_env.environment = env; add_child(world_env)
 
+# ── Late-join: existing peers spawn one new player ────────────────────────────
+func _on_player_joined_mid_game(pid: int, idx: int) -> void:
+	if game_manager == null or not is_instance_valid(game_manager): return
+	if _players.has(pid): return   # already spawned (shouldn't happen)
+
+	game_manager.register_player(pid)
+
+	var p = Player.new()
+	p.name         = "Player_%d" % idx
+	p.peer_id      = pid
+	p.player_index = idx
+	p.set_multiplayer_authority(pid)
+	p.game_manager = game_manager
+	add_child(p)
+	p.trap_manager  = trap_manager
+	p.sound_manager = sound_manager
+	_players[pid] = p
+
 # ── Peer disconnect ───────────────────────────────────────────────────────────
 func _on_peer_left(pid: int) -> void:
 	if pid == -1:
@@ -244,6 +270,14 @@ func _on_peer_left(pid: int) -> void:
 		game_manager.respawning.erase(pid)
 		game_manager._respawn_timers.erase(pid)
 		game_manager._last_damager.erase(pid)
+
+	# Free the voice speaker for that peer
+	if voice_manager and is_instance_valid(voice_manager):
+		voice_manager.remove_speaker(pid)
+
+	# If the game is still running, check whether only one player remains
+	if game_manager and is_instance_valid(game_manager):
+		game_manager.check_win_condition()
 
 # ── UI ────────────────────────────────────────────────────────────────────────
 func _create_ui() -> void:

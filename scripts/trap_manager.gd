@@ -2,6 +2,8 @@ extends Node
 
 class_name TrapManager
 
+signal trap_triggered(victim_pid: int, owner_pid: int, trap_type: int)
+
 # ── References ────────────────────────────────────────────────────────────────
 var game_manager: GameManager
 var sound_manager: SoundManager
@@ -117,7 +119,7 @@ func _check_floor_traps(delta: float) -> void:
 			if pnode.position.distance_to(trap_world) < TRAP_TRIGGER_RADIUS:
 				if not _check_mirror(pid, owner_pid, entry):
 					if sound_manager: sound_manager.play_trap_trigger()
-					_apply_effect(pid, trap_type, trap_world)
+					_apply_effect(pid, trap_type, trap_world, owner_pid)
 					to_remove.append(entry)
 					triggered = true
 					break
@@ -132,15 +134,18 @@ func _check_mirror(victim_pid: int, owner_pid: int, entry: Dictionary) -> bool:
 	if not _mirror_shields.get(victim_pid, false):
 		return false
 	_mirror_shields[victim_pid] = false
-	_apply_effect(owner_pid, entry["type"], game_manager.grid_to_world(entry["cell"]))
+	# Reflect trap back: owner becomes the new victim, reflected by victim_pid
+	_apply_effect(owner_pid, entry["type"], game_manager.grid_to_world(entry["cell"]), victim_pid)
 	return true
 
 # ── Apply effect to a peer_id ─────────────────────────────────────────────────
-func _apply_effect(target_pid: int, trap_type: int, trap_pos: Vector3) -> void:
+func _apply_effect(target_pid: int, trap_type: int, trap_pos: Vector3, owner_pid: int = -1) -> void:
 	_show_effect_flash(trap_pos, Config.TRAP_COLORS[trap_type])
 
 	if trap_type == Config.TrapType.MIRROR or trap_type == Config.TrapType.LURE:
 		return
+
+	trap_triggered.emit(target_pid, owner_pid, trap_type)
 
 	match trap_type:
 		Config.TrapType.FREEZE:
@@ -164,7 +169,7 @@ func _apply_effect(target_pid: int, trap_type: int, trap_pos: Vector3) -> void:
 			var ct = target_pid
 			get_tree().create_timer(4.0).timeout.connect(func():
 				if game_manager.has_effect(ct, "poison"):
-					game_manager.damage_player(ct, 5)
+					game_manager.damage_player(ct, Config.HIT_DAMAGE, owner_pid)
 			)
 
 		Config.TrapType.BLIND:
@@ -180,7 +185,7 @@ func _apply_effect(target_pid: int, trap_type: int, trap_pos: Vector3) -> void:
 		Config.TrapType.TURRET:
 			pass   # spawned at place_trap time
 
-	game_manager.damage_player(target_pid, 5)
+	game_manager.damage_player(target_pid, Config.HIT_DAMAGE, owner_pid)
 
 # ── Teleport ─────────────────────────────────────────────────────────────────
 func _teleport_target(target_pid: int) -> void:
@@ -209,7 +214,7 @@ func _explode_bomb(entry: Dictionary) -> void:
 		var pid = pnode.get("peer_id")
 		if pid == null or pid == owner_pid: continue   # don't damage bomb owner
 		if pnode.position.distance_to(bomb_pos) < radius:
-			game_manager.damage_player(pid, 5)
+			game_manager.damage_player(pid, Config.HIT_DAMAGE, owner_pid)
 
 # ── Turret ────────────────────────────────────────────────────────────────────
 func _spawn_turret(pos: Vector3, owner_pid: int) -> void:
@@ -316,7 +321,7 @@ func _tick_turrets(delta: float) -> void:
 			var pid = pnode.get("peer_id")
 			if pid == null or pid == owner_pid: continue
 			if turret_pos.distance_to(pnode.position) < hit_range:
-				game_manager.damage_player(pid, 5)
+				game_manager.damage_player(pid, Config.HIT_DAMAGE, owner_pid)
 				t["node"].queue_free(); to_remove.append(t)
 				break
 	for t in to_remove: _turrets.erase(t)
@@ -333,7 +338,7 @@ func _tick_fire_zones(delta: float) -> void:
 			var pid = pnode.get("peer_id")
 			if pid == null: continue
 			if pnode.position.distance_to(fire_pos) < radius:
-				game_manager.damage_player(pid, 5)
+				game_manager.damage_player(pid, Config.HIT_DAMAGE)
 				f["node"].queue_free(); to_remove.append(f)
 				break
 	for f in to_remove: _fire_zones.erase(f)
@@ -362,7 +367,7 @@ func _tick_lures(delta: float) -> void:
 			var pid = pnode.get("peer_id")
 			if pid == null or pid == l["owner"]: continue
 			if pnode.position.distance_to(lure_world) < Config.CELL_SIZE:
-				game_manager.damage_player(pid, 5)
+				game_manager.damage_player(pid, Config.HIT_DAMAGE, l["owner"])
 				if is_instance_valid(l["node"]): l["node"].queue_free()
 				to_remove.append(l)
 				break

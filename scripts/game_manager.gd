@@ -2,6 +2,8 @@ extends Node
 
 class_name GameManager
 
+signal player_damaged(victim_pid: int, attacker_pid: int, amount: int)
+
 # ── Maze data ───────────────────────────────────────────────────────────────
 var grid: Array
 var spawns: Array        # Array of [col, row] — up to MAX_PLAYERS spawn points
@@ -113,6 +115,7 @@ func damage_player(victim_pid: int, amount: int, attacker_pid: int = -1) -> void
 	if attacker_pid != -1:
 		_last_damager[victim_pid] = attacker_pid
 	hp[victim_pid] = max(0, hp[victim_pid] - amount)
+	player_damaged.emit(victim_pid, attacker_pid, amount)
 	if hp[victim_pid] == 0:
 		_player_died(victim_pid)
 
@@ -124,6 +127,12 @@ func net_damage(victim_pid: int, amount: int, attacker_pid: int = -1) -> void:
 ## Backward-compat for TrapManager and Robot which still use string targets.
 func damage_target(target, amount: int) -> void:
 	damage_player(_to_pid(target), amount)
+
+## Public entry-point so external callers (e.g. on peer disconnect) can
+## re-evaluate the win condition without going through a damage event.
+func check_win_condition() -> void:
+	if is_playing:
+		_check_win()
 
 ## Spawn a visual-only bullet on the remote peers.
 @rpc("any_peer", "call_remote", "reliable")

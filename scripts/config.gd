@@ -33,7 +33,8 @@ const PLAYER_COLORS: Array = [
 ]
 
 # ── HP ──────────────────────────────────────────────────────────────────────
-const MAX_HP = 100
+const MAX_HP     = 100
+const HIT_DAMAGE = 15
 
 # ── Player ──────────────────────────────────────────────────────────────────
 const PLAYER_SPEED            = 3.2

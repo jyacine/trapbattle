@@ -6,9 +6,13 @@ signal start_game(seed_val: int, is_mp: bool)
 var _net: NetworkManager
 
 # Menu controls (hidden when entering lobby)
-var _status:     Label
-var _ip_field:   LineEdit
-var _menu_nodes: Array = []
+var _status:          Label
+var _ip_field:        LineEdit
+var _name_field:      LineEdit
+var _color_btns:      Array = []
+var _selected_color:  int   = 0
+var _default_name:    String = ""
+var _menu_nodes:      Array = []
 
 # Lobby overlay controls (shown after connecting)
 var _player_list:      Label = null
@@ -20,7 +24,7 @@ var _start_btn:        Button = null
 var _lobby_room: LobbyRoom = null
 
 # Countdown state (each client tracks locally; host triggers the actual start)
-var _countdown: float = 60.0
+var _countdown: float = 15.0
 var _counting:  bool  = false
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -100,8 +104,8 @@ func _build_menu() -> void:
 	_menu_nodes.append(btn_sp)
 
 	_ip_field = LineEdit.new()
-	_ip_field.placeholder_text = "Host IP  (e.g. 192.168.1.10)"
-	_ip_field.text = "172.174.208.254"
+	_ip_field.placeholder_text = "Server host  (e.g. 172-174-208-254.nip.io)"
+	_ip_field.text = "172-174-208-254.nip.io"
 	_ip_field.add_theme_font_size_override("font_size", 18)
 	_ip_field.anchor_left = 0.5;  _ip_field.anchor_right  = 0.5
 	_ip_field.anchor_top  = 0.5;  _ip_field.anchor_bottom = 0.5
@@ -112,11 +116,53 @@ func _build_menu() -> void:
 
 	var is_web = OS.has_feature("web")
 
+	# Player name field
+	_default_name = "Player_%04d" % randi_range(1000, 9999)
+	_name_field = LineEdit.new()
+	_name_field.placeholder_text = "Your name"
+	_name_field.text = _default_name
+	_name_field.add_theme_font_size_override("font_size", 18)
+	_name_field.anchor_left = 0.5;  _name_field.anchor_right  = 0.5
+	_name_field.anchor_top  = 0.5;  _name_field.anchor_bottom = 0.5
+	_name_field.offset_left = -210; _name_field.offset_right  = 210
+	_name_field.offset_top  = 46;   _name_field.offset_bottom = 90
+	add_child(_name_field)
+	_menu_nodes.append(_name_field)
+
+	# Color swatches
+	var color_row = HBoxContainer.new()
+	color_row.anchor_left  = 0.5; color_row.anchor_right  = 0.5
+	color_row.anchor_top   = 0.5; color_row.anchor_bottom = 0.5
+	color_row.offset_left  = -210; color_row.offset_right  = 210
+	color_row.offset_top   = 102;  color_row.offset_bottom = 144
+	color_row.add_theme_constant_override("separation", 4)
+	add_child(color_row)
+	_menu_nodes.append(color_row)
+
+	for ci: int in Config.PLAYER_COLORS.size():
+		var cb = Button.new()
+		cb.custom_minimum_size = Vector2(38, 38)
+		var sb_normal = StyleBoxFlat.new()
+		sb_normal.bg_color = Config.PLAYER_COLORS[ci]
+		sb_normal.set_corner_radius_all(4)
+		var sb_selected = StyleBoxFlat.new()
+		sb_selected.bg_color   = Config.PLAYER_COLORS[ci]
+		sb_selected.border_color = Color.WHITE
+		sb_selected.set_border_width_all(3)
+		sb_selected.set_corner_radius_all(4)
+		cb.add_theme_stylebox_override("normal",  sb_normal if ci != 0 else sb_selected)
+		cb.add_theme_stylebox_override("pressed", sb_selected)
+		cb.add_theme_stylebox_override("hover",   sb_selected)
+		var idx = ci
+		cb.pressed.connect(func(): _on_color_selected(idx))
+		color_row.add_child(cb)
+		_color_btns.append(cb)
+
 	var btn_host = _mk_btn("HOST GAME", Color(0.15, 0.35, 0.85))
 	btn_host.anchor_left = 0.5;  btn_host.anchor_right  = 0.5
 	btn_host.anchor_top  = 0.5;  btn_host.anchor_bottom = 0.5
 	btn_host.offset_left = -210; btn_host.offset_right  = -8
-	btn_host.offset_top  = 44;   btn_host.offset_bottom = 100
+	btn_host.offset_top  = 156;  btn_host.offset_bottom = 212
 	btn_host.pressed.connect(_on_host)
 	btn_host.visible = not is_web
 	add_child(btn_host)
@@ -127,7 +173,7 @@ func _build_menu() -> void:
 	btn_join.anchor_left = 0.5;   btn_join.anchor_right  = 0.5
 	btn_join.anchor_top  = 0.5;   btn_join.anchor_bottom = 0.5
 	btn_join.offset_left = join_left; btn_join.offset_right = 210
-	btn_join.offset_top  = 44;    btn_join.offset_bottom = 100
+	btn_join.offset_top  = 156;   btn_join.offset_bottom = 212
 	btn_join.pressed.connect(_on_join)
 	add_child(btn_join)
 	_menu_nodes.append(btn_join)
@@ -139,7 +185,7 @@ func _build_menu() -> void:
 	_status.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_status.anchor_left = 0.0; _status.anchor_right = 1.0
 	_status.anchor_top  = 0.5; _status.anchor_bottom = 0.5
-	_status.offset_top  = 120; _status.offset_bottom = 160
+	_status.offset_top  = 228; _status.offset_bottom = 268
 	add_child(_status)
 	_menu_nodes.append(_status)
 
@@ -243,15 +289,32 @@ func _on_single_player() -> void:
 	start_game.emit(0, false)
 	queue_free()
 
+func _on_color_selected(idx: int) -> void:
+	_selected_color = idx
+	for i: int in _color_btns.size():
+		var sb = StyleBoxFlat.new()
+		sb.bg_color = Config.PLAYER_COLORS[i]
+		sb.set_corner_radius_all(4)
+		if i == idx:
+			sb.border_color = Color.WHITE
+			sb.set_border_width_all(3)
+		_color_btns[i].add_theme_stylebox_override("normal", sb)
+
+func _apply_identity() -> void:
+	var name = _name_field.text.strip_edges() if _name_field else ""
+	_net.my_name      = name if name != "" else _default_name
+	_net.my_color_idx = _selected_color
+
 func _on_host() -> void:
+	_apply_identity()
 	_net.host_game()        # sets _peers=[1], emits lobby_updated([1])
 	_enter_lobby_room()
-	# Trigger initial slot display now that the room exists
 	_on_lobby_updated([1])
 
 func _on_join() -> void:
+	_apply_identity()
 	var ip = _ip_field.text.strip_edges()
-	_status.text = "Connecting to %s:%d …" % [ip, NetworkManager.PORT]
+	_status.text = "Connecting to %s …" % ip
 	_net.join_game(ip)
 
 func _on_connected() -> void:
@@ -261,17 +324,21 @@ func _on_connected() -> void:
 
 # ── Lobby update from NetworkManager ─────────────────────────────────────────
 func _on_lobby_updated(peer_ids: Array) -> void:
+	var names      = _net.player_names
+	var color_idxs = _net.player_color_indices
+
 	# Update 3-D slot labels
 	if _lobby_room and is_instance_valid(_lobby_room):
 		var local_pid = multiplayer.get_unique_id() if multiplayer.has_multiplayer_peer() else 1
-		_lobby_room.update_slots(peer_ids, local_pid)
+		_lobby_room.update_slots(peer_ids, local_pid, names, color_idxs)
 
 	# Update text player list
 	if _player_list:
 		var lines: Array = []
 		for i: int in peer_ids.size():
 			var pid = peer_ids[i]
-			var txt = "  ● Player %d" % (i + 1)
+			var pname = names.get(pid, "Player %d" % (i + 1))
+			var txt   = "  ● %s" % pname
 			if multiplayer.has_multiplayer_peer() and pid == multiplayer.get_unique_id():
 				txt += "  (you)"
 			if i == 0:
@@ -282,23 +349,25 @@ func _on_lobby_updated(peer_ids: Array) -> void:
 			+ "\n".join(lines)
 		)
 
-	# Countdown: start when ≥ 2 players, reset if drops back below 2
+	# Countdown: start (15 s) when ≥ 2 players are in the lobby
 	if peer_ids.size() >= 2:
 		if not _counting:
 			_counting  = true
-			_countdown = 60.0
+			_countdown = 15.0
 			if _countdown_label:
 				_countdown_label.add_theme_color_override("font_color", Color(0.7, 0.88, 1.0))
 	else:
 		_counting = false
 		if _countdown_label:
-			_countdown_label.text = "Waiting for more players…  (%d connected)" % peer_ids.size()
+			var waiting_for = 2 - peer_ids.size()
+			_countdown_label.text = "Waiting for %d more player%s…" % \
+				[waiting_for, "s" if waiting_for != 1 else ""]
 			_countdown_label.add_theme_color_override("font_color", Color(0.7, 0.88, 1.0))
 
-	# START button: captain only, need ≥ 2 players
+	# START button: captain only, requires ≥ 2 players
 	if _start_btn:
-		_start_btn.visible   = _net.is_captain and peer_ids.size() >= 2
-		_start_btn.disabled  = false
+		_start_btn.visible  = _net.is_captain and peer_ids.size() >= 2
+		_start_btn.disabled = false
 
 func _on_start_pressed() -> void:
 	if _start_btn:

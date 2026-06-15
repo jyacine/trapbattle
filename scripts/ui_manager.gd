@@ -5,8 +5,8 @@ class_name UIManager
 # ── References (discovered in _ready via "players" group) ─────────────────────
 var game_manager: GameManager
 var player: Player         # local / authoritative player
-var _opponents: Array = [] # all other nodes in "players" group
-var _net: NetworkManager   # for reading ping_ms
+var _opponents: Array = []
+var _net: NetworkManager
 
 # ── HUD labels ────────────────────────────────────────────────────────────────
 var _kills_label:   Label
@@ -14,13 +14,19 @@ var _trap_label:    Label
 var _gun_label:     Label
 var _hint_label:    Label
 var _effects_label: Label
-var _score_label:   Label   # compact N-player scoreboard
 var _ping_label:    Label
 
-# ── HP bar ────────────────────────────────────────────────────────────────────
+# ── HP bar (local player) ─────────────────────────────────────────────────────
 var _hp_bg:    ColorRect
 var _hp_fill:  ColorRect
 var _hp_label: Label
+
+# ── Player list panel (all players, right side) ───────────────────────────────
+var _player_hud_panel: PanelContainer
+var _player_hud_vbox:  VBoxContainer
+# pid → { hp_fill, voice_lbl, hp_lbl, kills_lbl, lives_lbl, row_root }
+var _player_rows: Dictionary = {}
+var _speaking_pids: Dictionary = {}  # pid → bool
 
 # ── Minimap ───────────────────────────────────────────────────────────────────
 var _mm_rect:    TextureRect
@@ -34,10 +40,13 @@ var _overlay_panel: Panel
 var _overlay_label: Label
 var _retry_btn:     Button
 
+# ── Notifications ─────────────────────────────────────────────────────────────
+var _notif_vbox: VBoxContainer
+
 # ── Blind flash ───────────────────────────────────────────────────────────────
 var _blind_overlay: ColorRect
 
-# ── Mobile buttons ────────────────────────────────────────────────────────────
+# ── Mobile buttons (only built on phone/tablet) ───────────────────────────────
 var _btn_fwd:   Button
 var _btn_bwd:   Button
 var _btn_place: Button
@@ -46,19 +55,27 @@ var _btn_fire:  Button
 # ── Crosshair ─────────────────────────────────────────────────────────────────
 var _crosshair_parts: Array = []
 
+# ── Device detection ──────────────────────────────────────────────────────────
+static func _is_mobile_device() -> bool:
+	if OS.has_feature("android") or OS.has_feature("ios"):
+		return true
+	if OS.has_feature("web"):
+		# Ask the browser whether a touch screen is present
+		var result = JavaScriptBridge.eval("navigator.maxTouchPoints > 0 ? 1 : 0")
+		return int(result) > 0
+	return false
+
 # ────────────────────────────────────────────────────────────────────────────
 func _ready() -> void:
 	var root     = get_parent()
 	game_manager = root.get_node("GameManager")
 	_net         = root.get_node_or_null("NetworkManager")
 
-	# Find local player (authority) among all players in group
 	for p in get_tree().get_nodes_in_group("players"):
 		if p is Player and p.is_multiplayer_authority():
 			player = p as Player
 			break
 
-	# Opponents = everyone except the local player
 	for p in get_tree().get_nodes_in_group("players"):
 		if p != player:
 			_opponents.append(p)
@@ -67,17 +84,32 @@ func _ready() -> void:
 	_build_hp_bar()
 	_build_crosshair()
 	_build_minimap()
+	_build_player_hud()
 	_build_overlay()
 	_build_blind_overlay()
 	_build_mobile_buttons()
+	_build_notifications()
 
 	if player != null:
 		player.set_blind_overlay(_blind_overlay)
+
+	game_manager.player_damaged.connect(_on_player_damaged)
+	var trap_mgr = root.get_node_or_null("TrapManager")
+	if trap_mgr != null:
+		trap_mgr.trap_triggered.connect(_on_trap_triggered)
+	if _net != null:
+		_net.peer_left.connect(_on_peer_disconnected_notif)
+
+	# Connect voice speaking signal so we can show the 🔊 icon
+	var vm = root.get_node_or_null("VoiceManager") as VoiceManager
+	if vm:
+		vm.player_speaking_changed.connect(_on_player_speaking_changed)
 
 # ────────────────────────────────────────────────────────────────────────────
 func _process(_delta: float) -> void:
 	if player == null: return
 	_update_hud()
+	_update_player_hud()
 	_update_minimap()
 	_update_crosshair()
 	if not game_manager.is_playing:
@@ -94,18 +126,15 @@ func _build_hud() -> void:
 	_gun_label = _make_label("", 10, 72, 17, Color(0.3, 1.0, 0.3))
 	add_child(_gun_label)
 
-	_score_label = _make_label("", 0, 10, 15, Color(0.8, 0.8, 0.8))
-	_score_label.anchor_left  = 1.0; _score_label.anchor_right = 1.0
-	_score_label.offset_left  = -200; _score_label.offset_right = -8
-	add_child(_score_label)
-
 	_effects_label = _make_label("", 10, 0, 17, Color(0.8, 1.0, 0.8))
 	_effects_label.anchor_top    = 1.0; _effects_label.anchor_bottom = 1.0
 	_effects_label.offset_top    = -80; _effects_label.offset_bottom = -10
 	add_child(_effects_label)
 
+	var is_mp     = multiplayer.has_multiplayer_peer()
+	var voice_hint = "  V=Mute/Unmute" if is_mp else ""
 	_hint_label = _make_label(
-		"W/S=Move  Q/E=Turn  Walk over box=Pick up  SPACE=Throw Trap  LMB=Fire Gun  R=Restart",
+		"W/S=Move  Q/E=Turn  Walk over box=Pick up  SPACE=Throw Trap  LMB=Fire  R=Restart" + voice_hint,
 		0, 0, 13, Color(0.8, 0.8, 0.8)
 	)
 	_hint_label.anchor_left   = 0.0; _hint_label.anchor_right = 1.0
@@ -147,6 +176,177 @@ func _build_hp_bar() -> void:
 	_hp_label.position = Vector2(0, 4); _hp_label.size = Vector2(306, 24)
 	_hp_bg.add_child(_hp_label)
 
+# ── Player list panel ─────────────────────────────────────────────────────────
+func _build_player_hud() -> void:
+	if game_manager == null: return
+
+	# Outer panel — right side, below the top bar
+	_player_hud_panel = PanelContainer.new()
+	var sb = StyleBoxFlat.new()
+	sb.bg_color = Color(0.0, 0.0, 0.0, 0.60)
+	sb.set_corner_radius_all(6)
+	_player_hud_panel.add_theme_stylebox_override("panel", sb)
+	_player_hud_panel.anchor_left   = 1.0; _player_hud_panel.anchor_right  = 1.0
+	_player_hud_panel.anchor_top    = 0.0; _player_hud_panel.anchor_bottom = 0.0
+	_player_hud_panel.offset_left   = -230; _player_hud_panel.offset_right  = -8
+	_player_hud_panel.offset_top    = 8;    _player_hud_panel.offset_bottom = 8  # grows with content
+	add_child(_player_hud_panel)
+
+	_player_hud_vbox = VBoxContainer.new()
+	_player_hud_vbox.add_theme_constant_override("separation", 4)
+	_player_hud_panel.add_child(_player_hud_vbox)
+
+	for pid in game_manager.player_ids:
+		_ensure_player_row(pid)
+
+## Called from _update_player_hud to create a row on demand (late joiners etc.)
+func _ensure_player_row(pid: int) -> void:
+	if _player_rows.has(pid): return
+	if game_manager == null or _player_hud_vbox == null: return
+
+	var idx    = game_manager.player_ids.find(pid)
+	var col    = Config.PLAYER_COLORS[idx % Config.PLAYER_COLORS.size()] if idx >= 0 else Color.WHITE
+	var is_me  = (player != null and pid == player.peer_id)
+
+	var name_str: String
+	if _net and _net.player_names.has(pid):
+		name_str = _net.player_names[pid]
+	elif is_me:
+		name_str = "You"
+	else:
+		name_str = "P%d" % (idx + 1)
+
+	# ── Row container ─────────────────────────────────────────────────────────
+	var row_pc = PanelContainer.new()
+	var rsb = StyleBoxFlat.new()
+	rsb.bg_color = Color(col.r * 0.15, col.g * 0.15, col.b * 0.15, 0.5)
+	rsb.border_color = Color(col.r, col.g, col.b, 0.45)
+	rsb.set_border_width_all(1); rsb.set_corner_radius_all(4)
+	row_pc.add_theme_stylebox_override("panel", rsb)
+	row_pc.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_player_hud_vbox.add_child(row_pc)
+
+	var col_v = VBoxContainer.new()
+	col_v.add_theme_constant_override("separation", 2)
+	row_pc.add_child(col_v)
+
+	# ── Top line: dot · name · voice icon ─────────────────────────────────────
+	var top_h = HBoxContainer.new()
+	top_h.add_theme_constant_override("separation", 4)
+	col_v.add_child(top_h)
+
+	var dot = ColorRect.new()
+	dot.color = col
+	dot.custom_minimum_size = Vector2(10, 10)
+	top_h.add_child(dot)
+
+	var name_lbl = Label.new()
+	name_lbl.text = name_str + (" ★" if is_me else "")
+	name_lbl.add_theme_font_size_override("font_size", 12)
+	name_lbl.add_theme_color_override("font_color",
+		Color(1.0, 0.95, 0.5) if is_me else Color(0.9, 0.9, 0.9))
+	name_lbl.clip_text = true
+	name_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	top_h.add_child(name_lbl)
+
+	var voice_lbl = Label.new()
+	voice_lbl.text = "🔊"
+	voice_lbl.add_theme_font_size_override("font_size", 12)
+	voice_lbl.visible = false
+	top_h.add_child(voice_lbl)
+
+	# ── HP bar ────────────────────────────────────────────────────────────────
+	# Outer fixed-height control; inner fill uses anchors for percentage width.
+	var bar_ctrl = Control.new()
+	bar_ctrl.custom_minimum_size = Vector2(0, 6)
+	bar_ctrl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	col_v.add_child(bar_ctrl)
+
+	var bar_bg = ColorRect.new()
+	bar_bg.set_anchors_preset(Control.PRESET_FULL_RECT)
+	bar_bg.color = Color(0.12, 0.05, 0.05, 0.9)
+	bar_ctrl.add_child(bar_bg)
+
+	var hp_fill = ColorRect.new()
+	hp_fill.color = col
+	hp_fill.anchor_left   = 0.0; hp_fill.anchor_top    = 0.0
+	hp_fill.anchor_right  = 1.0; hp_fill.anchor_bottom = 1.0
+	hp_fill.offset_left   = 0;   hp_fill.offset_right  = 0
+	hp_fill.offset_top    = 0;   hp_fill.offset_bottom = 0
+	bar_ctrl.add_child(hp_fill)
+
+	# ── Bottom line: HP · lives · kills ──────────────────────────────────────
+	var bot_h = HBoxContainer.new()
+	bot_h.add_theme_constant_override("separation", 6)
+	col_v.add_child(bot_h)
+
+	var hp_lbl = _make_label("100 HP", 0, 0, 10, Color(0.75, 0.75, 0.75))
+	hp_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	bot_h.add_child(hp_lbl)
+
+	var lives_lbl = _make_label("♥♥♥", 0, 0, 10, Color(0.95, 0.35, 0.35))
+	bot_h.add_child(lives_lbl)
+
+	var kills_lbl = _make_label("K:0", 0, 0, 10, Color(0.55, 0.85, 1.0))
+	bot_h.add_child(kills_lbl)
+
+	_player_rows[pid] = {
+		"hp_fill":   hp_fill,
+		"voice_lbl": voice_lbl,
+		"hp_lbl":    hp_lbl,
+		"lives_lbl": lives_lbl,
+		"kills_lbl": kills_lbl,
+		"base_col":  col,
+	}
+
+func _update_player_hud() -> void:
+	if game_manager == null or _player_hud_vbox == null: return
+
+	for pid in game_manager.player_ids:
+		_ensure_player_row(pid)   # handles late joiners
+
+	for pid in _player_rows.keys():
+		var row = _player_rows[pid]
+
+		var hp    = game_manager.hp.get(pid, Config.MAX_HP)
+		var ratio = float(hp) / float(Config.MAX_HP)
+
+		# HP bar fill width
+		var fill: ColorRect = row["hp_fill"]
+		if is_instance_valid(fill):
+			fill.anchor_right = ratio
+			# Colour shifts red as health drops
+			var base: Color = row["base_col"]
+			if   ratio > 0.60: fill.color = base
+			elif ratio > 0.30: fill.color = Color(0.92, 0.78, 0.08)
+			else:              fill.color = Color(0.95, 0.18, 0.12)
+
+		# HP text
+		var hp_lbl: Label = row["hp_lbl"]
+		if is_instance_valid(hp_lbl):
+			hp_lbl.text = "%d HP" % hp
+
+		# Lives hearts
+		var lives: int = game_manager.lives.get(pid, Config.PLAYER_LIVES)
+		var lives_lbl: Label = row["lives_lbl"]
+		if is_instance_valid(lives_lbl):
+			lives_lbl.text = "♥".repeat(max(lives, 0))
+
+		# Kills
+		var kills: int = game_manager.kills.get(pid, 0)
+		var kills_lbl: Label = row["kills_lbl"]
+		if is_instance_valid(kills_lbl):
+			kills_lbl.text = "K:%d" % kills
+
+		# Voice icon
+		var voice_lbl: Label = row["voice_lbl"]
+		if is_instance_valid(voice_lbl):
+			voice_lbl.visible = _speaking_pids.get(pid, false)
+
+func _on_player_speaking_changed(pid: int, speaking: bool) -> void:
+	_speaking_pids[pid] = speaking
+
+# ── Crosshair ─────────────────────────────────────────────────────────────────
 func _build_crosshair() -> void:
 	var root = Control.new()
 	root.anchor_left  = 0.5; root.anchor_right  = 0.5
@@ -174,8 +374,8 @@ func _update_crosshair() -> void:
 	var on_target := false
 	if game_manager.is_playing:
 		var fwd = Vector3(-sin(player.yaw), 0.0, -cos(player.yaw))
-		for opp in _opponents:
-			if not is_instance_valid(opp): continue
+		for opp in get_tree().get_nodes_in_group("players"):
+			if opp == player or not is_instance_valid(opp): continue
 			var opid = opp.get("peer_id")
 			if opid != null and game_manager.respawning.get(opid, false): continue
 			var to_opp = opp.position - player.position
@@ -205,17 +405,6 @@ func _update_hud() -> void:
 	_kills_label.text = "Kills: %d  Lives: %s  (first to %d wins)" % [
 		my_k, "♥ ".repeat(my_l).strip_edges(), Config.KILLS_TO_WIN
 	]
-
-	# Compact scoreboard of other players
-	var lines: Array = []
-	for i in game_manager.player_ids.size():
-		var opid = game_manager.player_ids[i]
-		if opid == pid: continue
-		var ok = game_manager.kills.get(opid, 0)
-		var ol = game_manager.lives.get(opid, 0)
-		var oh = game_manager.hp.get(opid, Config.MAX_HP)
-		lines.append("P%d  K:%d L:%d HP:%d" % [i + 1, ok, ol, oh])
-	_score_label.text = "\n".join(lines)
 
 	# HP bar
 	var ratio = float(my_hp) / float(Config.MAX_HP)
@@ -252,12 +441,9 @@ func _update_hud() -> void:
 		var ms = _net.ping_ms
 		_ping_label.text = "● %d ms" % ms
 		var col: Color
-		if ms < 50:
-			col = Color(0.2, 1.0, 0.2)
-		elif ms < 150:
-			col = Color(1.0, 0.85, 0.1)
-		else:
-			col = Color(1.0, 0.25, 0.25)
+		if ms < 50:        col = Color(0.2, 1.0, 0.2)
+		elif ms < 150:     col = Color(1.0, 0.85, 0.1)
+		else:              col = Color(1.0, 0.25, 0.25)
 		_ping_label.add_theme_color_override("font_color", col)
 
 # ── Minimap ───────────────────────────────────────────────────────────────────
@@ -287,21 +473,18 @@ func _update_minimap() -> void:
 					var px = c * MM_CELL + dx; var py = r * MM_CELL + dy
 					if px < w and py < h: _mm_image.set_pixel(px, py, col)
 
-	# Local player (always cyan for visibility)
 	if player != null:
 		var pg = player.get_grid_position()
 		_mm_dot(pg[0], pg[1], Color.CYAN, 3)
 
-	# All opponents with their player color
-	for opp in _opponents:
-		if not is_instance_valid(opp): continue
+	for opp in get_tree().get_nodes_in_group("players"):
+		if opp == player or not is_instance_valid(opp): continue
 		var idx = opp.get("player_index") if opp.get("player_index") != null else 1
 		var col = Config.PLAYER_COLORS[idx % Config.PLAYER_COLORS.size()]
 		if opp.has_method("get_grid_position"):
 			var og = opp.get_grid_position()
 			_mm_dot(og[0], og[1], col, 2)
 
-	# Trap boxes (yellow)
 	for box in get_tree().get_nodes_in_group("trap_boxes"):
 		var bg = game_manager.world_to_grid(box.position)
 		_mm_dot(bg[0], bg[1], Color.YELLOW, 2)
@@ -378,9 +561,11 @@ func _build_blind_overlay() -> void:
 	_blind_overlay.visible = false
 	add_child(_blind_overlay)
 
-# ── Mobile buttons ────────────────────────────────────────────────────────────
+# ── Mobile buttons (phone/tablet only) ───────────────────────────────────────
 func _build_mobile_buttons() -> void:
 	if player == null: return
+	if not _is_mobile_device(): return   # ← desktop: skip entirely
+
 	var sz = 100; var mg = 16
 
 	_btn_fwd = _mk_btn("FWD", Color(0.2, 0.6, 1.0))
@@ -418,6 +603,23 @@ func _build_mobile_buttons() -> void:
 	_btn_place.button_down.connect(func(): player._try_place())
 	_btn_fire.button_down.connect(func():  player._fire_gun())
 
+	# Voice toggle button (mobile, multiplayer only)
+	if multiplayer.has_multiplayer_peer():
+		var vm = get_parent().get_node_or_null("VoiceManager") as VoiceManager
+		if vm:
+			var btn_voice = _mk_btn("🎤\nON", Color(0.3, 0.8, 0.4))
+			btn_voice.anchor_left   = 1.0; btn_voice.anchor_right  = 1.0
+			btn_voice.anchor_top    = 1.0; btn_voice.anchor_bottom = 1.0
+			btn_voice.offset_left   = -(sz + mg); btn_voice.offset_right  = -mg
+			btn_voice.offset_top    = -470;        btn_voice.offset_bottom = -370
+			add_child(btn_voice)
+			# Toggle mute on press
+			btn_voice.pressed.connect(func():
+				if vm._transmitting: vm.mute()
+				else:                vm.unmute()
+			)
+			vm.voice_button = btn_voice
+
 func _mk_btn(txt: String, col: Color) -> Button:
 	var btn = Button.new()
 	btn.text = txt; btn.add_theme_font_size_override("font_size", 16)
@@ -438,6 +640,64 @@ func _make_label(txt: String, ox: int, oy: int, sz: int, col: Color) -> Label:
 	lbl.add_theme_constant_override("shadow_offset_y", 2)
 	return lbl
 
+# ── Notifications ─────────────────────────────────────────────────────────────
+func _build_notifications() -> void:
+	_notif_vbox = VBoxContainer.new()
+	_notif_vbox.anchor_left  = 0.5; _notif_vbox.anchor_right  = 0.5
+	_notif_vbox.anchor_top   = 0.0; _notif_vbox.anchor_bottom = 0.0
+	_notif_vbox.offset_left  = -220; _notif_vbox.offset_right  = 220
+	_notif_vbox.offset_top   = 50
+	_notif_vbox.add_theme_constant_override("separation", 4)
+	add_child(_notif_vbox)
+
+func show_notification(text: String, col: Color = Color.WHITE) -> void:
+	var panel = PanelContainer.new()
+	var sb = StyleBoxFlat.new()
+	sb.bg_color = Color(0.0, 0.0, 0.0, 0.72)
+	sb.set_corner_radius_all(5)
+	panel.add_theme_stylebox_override("panel", sb)
+
+	var lbl = Label.new()
+	lbl.text = text
+	lbl.add_theme_font_size_override("font_size", 14)
+	lbl.add_theme_color_override("font_color", col)
+	lbl.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.9))
+	lbl.add_theme_constant_override("shadow_offset_x", 1)
+	lbl.add_theme_constant_override("shadow_offset_y", 1)
+	lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	panel.add_child(lbl)
+	_notif_vbox.add_child(panel)
+
+	var tween = create_tween()
+	tween.tween_property(panel, "modulate:a", 0.0, 0.5).set_delay(3.5)
+	tween.tween_callback(panel.queue_free)
+
+func _player_name(pid: int) -> String:
+	if _net != null and _net.player_names.has(pid):
+		return _net.player_names[pid]
+	var idx = game_manager.player_ids.find(pid)
+	return "Player %d" % (idx + 1) if idx >= 0 else "Player"
+
+func _on_player_damaged(victim_pid: int, attacker_pid: int, _amount: int) -> void:
+	if player == null or victim_pid != player.peer_id: return
+	if attacker_pid == -1 or attacker_pid == victim_pid:
+		show_notification("You were hit!", Color(1.0, 0.35, 0.35))
+	else:
+		show_notification("Hit by %s!" % _player_name(attacker_pid), Color(1.0, 0.35, 0.35))
+
+func _on_trap_triggered(victim_pid: int, owner_pid: int, trap_type: int) -> void:
+	if player == null or victim_pid != player.peer_id: return
+	var trap_name = Config.TRAP_NAMES.get(trap_type, "trap")
+	if owner_pid == -1:
+		show_notification("You triggered a %s!" % trap_name, Color(1.0, 0.65, 0.15))
+	else:
+		show_notification("Caught in %s's %s!" % [_player_name(owner_pid), trap_name], Color(1.0, 0.65, 0.15))
+
+func _on_peer_disconnected_notif(pid: int) -> void:
+	if pid == -1: return
+	show_notification("%s disconnected." % _player_name(pid), Color(0.6, 0.6, 0.6))
+
+# ── Input ─────────────────────────────────────────────────────────────────────
 func _input(event: InputEvent) -> void:
 	if event is InputEventKey and event.pressed and not event.echo:
 		if event.keycode == KEY_R:

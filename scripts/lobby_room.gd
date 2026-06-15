@@ -321,14 +321,15 @@ func _build_camera() -> void:
 	camera.make_current()
 
 # ── Called by LobbyUI on each lobby_updated signal ───────────────────────────
-func update_slots(peer_ids: Array, local_pid: int) -> void:
+func update_slots(peer_ids: Array, local_pid: int, names: Dictionary = {}, color_idxs: Dictionary = {}) -> void:
 	for i: int in NUM_SPOTS:
 		var occupied = i < peer_ids.size()
-		var col: Color = Config.PLAYER_COLORS[i]
 		if occupied:
-			var pid = peer_ids[i]
-			var txt = "Player %d" % (i + 1)
-			if i == 0:    txt += "  [HOST]"
+			var pid     = peer_ids[i]
+			var ci      = color_idxs.get(pid, i)
+			var col     = Config.PLAYER_COLORS[ci % Config.PLAYER_COLORS.size()]
+			var txt     = names.get(pid, "Player %d" % (i + 1))
+			if i == 0:       txt += "  [HOST]"
 			if pid == local_pid: txt += "  (YOU)"
 			_name_labels[i].text     = txt
 			_name_labels[i].modulate = col

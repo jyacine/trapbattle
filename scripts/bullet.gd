@@ -57,9 +57,9 @@ func _process(delta: float) -> void:
 		if game_manager.respawning.get(target_pid, false): continue
 		if position.distance_to(target.position + Vector3(0, 0.9, 0)) < 0.55:
 			if multiplayer.has_multiplayer_peer():
-				game_manager.net_damage.rpc(target_pid, 5, owner_peer_id)
+				game_manager.net_damage.rpc(target_pid, Config.HIT_DAMAGE, owner_peer_id)
 			else:
-				game_manager.damage_player(target_pid, 5, owner_peer_id)
+				game_manager.damage_player(target_pid, Config.HIT_DAMAGE, owner_peer_id)
 			if sound_manager: sound_manager.play_gun_hit()
 			queue_free()
 			return
