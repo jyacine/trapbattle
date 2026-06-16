@@ -31,7 +31,7 @@ func _ready() -> void:
 
 # ────────────────────────────────────────────────────────────────────────────
 func _process(delta: float) -> void:
-	if not game_manager.is_playing:
+	if not game_manager.is_playing or not visible:
 		return
 
 	# Animate: gentle bob + rotating light
@@ -71,13 +71,20 @@ func _snap_to_grid() -> void:
 		(current_grid_pos[1] + 0.5) * cs
 	)
 
-# ── After pickup: move box to a new random position with a new trap ───────────
+# ── After pickup: hide for 30 s, then reappear at a new position ──────────────
 func respawn_box() -> void:
+	visible = false
+	remove_from_group("trap_boxes")
+	get_tree().create_timer(30.0).timeout.connect(_do_respawn)
+
+func _do_respawn() -> void:
 	var new_cell = game_manager.get_random_floor_cell()
 	current_grid_pos = new_cell
 	_snap_to_grid()
 	_assign_random_trap()
 	_update_colors()
+	visible = true
+	add_to_group("trap_boxes")
 
 func _assign_random_trap() -> void:
 	trap_type = randi() % 15   # 0-14
