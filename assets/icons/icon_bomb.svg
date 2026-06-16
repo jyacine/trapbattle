@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <defs>
+    <filter id="s" x="-25%" y="-25%" width="150%" height="150%">
+      <feDropShadow dx="2" dy="2" stdDeviation="2.5" flood-color="#000" flood-opacity="0.75"/>
+    </filter>
+  </defs>
+  <g filter="url(#s)">
+    <!-- Bomb body -->
+    <circle cx="50" cy="65" r="27" fill="white"/>
+    <!-- Fuse stub -->
+    <rect x="44" y="33" width="12" height="9" rx="2" fill="white"/>
+    <!-- Fuse wire -->
+    <path d="M50,33 C56,22 65,18 69,10" stroke="white" stroke-width="4" fill="none"
+          stroke-linecap="round" stroke-linejoin="round"/>
+    <!-- Spark outer -->
+    <circle cx="70" cy="8" r="7" fill="#FF9500"/>
+    <!-- Spark inner -->
+    <circle cx="70" cy="8" r="3.5" fill="#FFE000"/>
+  </g>
+</svg>

@@ -599,22 +599,20 @@ func _build_mobile_buttons() -> void:
 	_joy_knob_nd = _circle_panel(_JOY_KNOB, Color(0.72, 0.74, 0.80, 0.72), Color(1.0, 1.0, 1.0, 0.88), 2)
 	add_child(_joy_knob_nd)
 
-	# FIRE button — large orange-red circle, bottom-right corner
-	_fire_nd = _action_icon_circle(FSZ, Color(0.88, 0.22, 0.06, 0.88), "gun")
+	# FIRE button — gun icon, right side, vertically centred
+	_fire_nd = _action_image_button(FSZ, "res://assets/icons/icon_gun.svg")
 	_fire_nd.anchor_left   = 1.0; _fire_nd.anchor_right  = 1.0
-	_fire_nd.anchor_top    = 1.0; _fire_nd.anchor_bottom = 1.0
+	_fire_nd.anchor_top    = 0.5; _fire_nd.anchor_bottom = 0.5
 	_fire_nd.offset_left   = -(FSZ + MG); _fire_nd.offset_right  = -MG
-	_fire_nd.offset_top    = -(FSZ + MG); _fire_nd.offset_bottom = -MG
+	_fire_nd.offset_top    = -FSZ * 0.5;  _fire_nd.offset_bottom = FSZ * 0.5
 	add_child(_fire_nd)
 
-	# TRAP button — blue circle, left of fire, vertically centred with it
-	_trap_nd = _action_icon_circle(TSZ, Color(0.22, 0.44, 0.90, 0.85), "bomb")
-	var trap_off_x := FSZ + TSZ + MG * 2 + 8
-	var trap_off_y := MG + (FSZ - TSZ) * 0.5
+	# TRAP button — bomb icon, above fire button, same right edge
+	_trap_nd = _action_image_button(TSZ, "res://assets/icons/icon_bomb.svg")
 	_trap_nd.anchor_left   = 1.0; _trap_nd.anchor_right  = 1.0
-	_trap_nd.anchor_top    = 1.0; _trap_nd.anchor_bottom = 1.0
-	_trap_nd.offset_left   = -trap_off_x - TSZ; _trap_nd.offset_right  = -trap_off_x
-	_trap_nd.offset_top    = -(TSZ + trap_off_y); _trap_nd.offset_bottom = -trap_off_y
+	_trap_nd.anchor_top    = 0.5; _trap_nd.anchor_bottom = 0.5
+	_trap_nd.offset_left   = -(TSZ + MG); _trap_nd.offset_right  = -MG
+	_trap_nd.offset_top    = -(FSZ * 0.5 + MG + TSZ); _trap_nd.offset_bottom = -(FSZ * 0.5 + MG)
 	add_child(_trap_nd)
 
 	# Voice button (multiplayer only) — above trap button
@@ -644,63 +642,23 @@ func _build_mobile_buttons() -> void:
 			)
 			vm.voice_button = btn_voice
 
-# Transparent hit-area panel with a vector icon drawn on top. No background
-# circle — icons float directly on the HUD like standard game action buttons.
-func _action_icon_circle(size: float, _col: Color, icon_kind: String) -> Panel:
+# Transparent hit-area panel with a SVG image button. No background — icon
+# floats directly on the HUD like a standard game action button.
+func _action_image_button(size: float, tex_path: String) -> Panel:
 	var p = Panel.new()
 	p.custom_minimum_size = Vector2(size, size)
 	var sb = StyleBoxFlat.new()
 	sb.bg_color = Color(0, 0, 0, 0)
 	p.add_theme_stylebox_override("panel", sb)
 	p.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	var icon = Control.new()
-	icon.custom_minimum_size = Vector2(size, size)
-	icon.set_anchors_preset(Control.PRESET_FULL_RECT)
-	icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	icon.draw.connect(_draw_action_icon.bind(icon, icon_kind))
-	p.add_child(icon)
+	var tr = TextureRect.new()
+	tr.texture = load(tex_path)
+	tr.expand_mode = TextureRect.EXPAND_FIT_WIDTH_PROPORTIONAL
+	tr.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	tr.set_anchors_preset(Control.PRESET_FULL_RECT)
+	tr.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	p.add_child(tr)
 	return p
-
-# Draws a coloured gun or bomb icon with a drop shadow for legibility on any
-# background. Coordinates normalised to the control's size — scales to any diameter.
-func _draw_action_icon(ctrl: Control, kind: String) -> void:
-	var w: float = ctrl.size.x
-	var h: float = ctrl.size.y
-	if w <= 0.0 or h <= 0.0: return
-	var shadow := Color(0, 0, 0, 0.70)
-	var so := Vector2(w * 0.04, h * 0.04)
-	if kind == "gun":
-		var col := Color(1.0, 0.55, 0.05, 1.0)
-		# Drop shadow
-		ctrl.draw_rect(Rect2(w*0.16+so.x, h*0.40+so.y, w*0.70, h*0.14), shadow)
-		ctrl.draw_rect(Rect2(w*0.80+so.x, h*0.35+so.y, w*0.06, h*0.06), shadow)
-		ctrl.draw_rect(Rect2(w*0.42+so.x, h*0.54+so.y, w*0.05, h*0.12), shadow)
-		ctrl.draw_colored_polygon(PackedVector2Array([
-			Vector2(w*0.28+so.x, h*0.54+so.y), Vector2(w*0.46+so.x, h*0.54+so.y),
-			Vector2(w*0.40+so.x, h*0.80+so.y), Vector2(w*0.22+so.x, h*0.80+so.y),
-		]), shadow)
-		# Icon — orange gun
-		ctrl.draw_rect(Rect2(w*0.16, h*0.40, w*0.70, h*0.14), col)
-		ctrl.draw_rect(Rect2(w*0.80, h*0.35, w*0.06, h*0.06), col)
-		ctrl.draw_rect(Rect2(w*0.42, h*0.54, w*0.05, h*0.12), col)
-		ctrl.draw_colored_polygon(PackedVector2Array([
-			Vector2(w*0.28, h*0.54), Vector2(w*0.46, h*0.54),
-			Vector2(w*0.40, h*0.80), Vector2(w*0.22, h*0.80),
-		]), col)
-	elif kind == "bomb":
-		var col   := Color(1.0, 1.0, 1.0, 1.0)
-		var spark := Color(1.0, 0.72, 0.12, 1.0)
-		var lw    := maxf(2.0, w * 0.04)
-		# Drop shadow
-		ctrl.draw_circle(Vector2(w*0.50+so.x, h*0.60+so.y), w*0.25, shadow)
-		ctrl.draw_rect(Rect2(w*0.44+so.x, h*0.29+so.y, w*0.12, h*0.09), shadow)
-		ctrl.draw_line(Vector2(w*0.50+so.x, h*0.30+so.y), Vector2(w*0.66+so.x, h*0.16+so.y), shadow, lw)
-		ctrl.draw_circle(Vector2(w*0.68+so.x, h*0.13+so.y), w*0.07, shadow)
-		# Icon — white bomb body, orange spark
-		ctrl.draw_circle(Vector2(w*0.50, h*0.60), w*0.25, col)
-		ctrl.draw_rect(Rect2(w*0.44, h*0.29, w*0.12, h*0.09), col)
-		ctrl.draw_line(Vector2(w*0.50, h*0.30), Vector2(w*0.66, h*0.16), col, lw)
-		ctrl.draw_circle(Vector2(w*0.68, h*0.13), w*0.07, spark)
 
 func _circle_panel(size: float, fill: Color, border: Color, bw: int) -> Panel:
 	var p = Panel.new()
