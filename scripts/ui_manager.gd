@@ -35,6 +35,10 @@ var _mm_texture: ImageTexture
 const MM_CELL   = 4
 const MM_MARGIN = 8
 
+# ── Exit / leave-match ─────────────────────────────────────────────────────────
+var _exit_btn:    Button
+var _exit_dialog: ConfirmationDialog
+
 # ── Win overlay ───────────────────────────────────────────────────────────────
 var _overlay_panel: Panel
 var _overlay_label: Label
@@ -106,6 +110,7 @@ func _ready() -> void:
 	_build_overlay()
 	_build_blind_overlay()
 	_build_mobile_buttons()
+	_build_exit_button()
 	_build_inventory_bar()
 	_build_notifications()
 
@@ -212,7 +217,8 @@ func _build_player_hud() -> void:
 	_player_hud_panel.anchor_left   = 1.0; _player_hud_panel.anchor_right  = 1.0
 	_player_hud_panel.anchor_top    = 0.0; _player_hud_panel.anchor_bottom = 0.0
 	_player_hud_panel.offset_left   = -230; _player_hud_panel.offset_right  = -8
-	_player_hud_panel.offset_top    = 8;    _player_hud_panel.offset_bottom = 8  # grows with content
+	# Sits below the Exit button (top-right corner).
+	_player_hud_panel.offset_top    = 56;   _player_hud_panel.offset_bottom = 56  # grows with content
 	add_child(_player_hud_panel)
 
 	_player_hud_vbox = VBoxContainer.new()
@@ -527,6 +533,53 @@ func _mm_dot(gx: int, gy: int, col: Color, radius: int) -> void:
 			var py = gy * MM_CELL + MM_CELL / 2 + dy
 			if px >= 0 and px < w and py >= 0 and py < h:
 				_mm_image.set_pixel(px, py, col)
+
+# ── Exit / leave-match ─────────────────────────────────────────────────────────
+func _build_exit_button() -> void:
+	_exit_btn = Button.new()
+	_exit_btn.text = "✕ Exit"
+	_exit_btn.add_theme_font_size_override("font_size", 16)
+	_exit_btn.add_theme_color_override("font_color", Color.WHITE)
+	var sb = StyleBoxFlat.new()
+	sb.bg_color      = Color(0.55, 0.12, 0.12, 0.85)
+	sb.border_color  = Color(1.0, 0.45, 0.45, 0.90)
+	sb.set_border_width_all(2); sb.set_corner_radius_all(6)
+	_exit_btn.add_theme_stylebox_override("normal",  sb)
+	_exit_btn.add_theme_stylebox_override("hover",   sb)
+	_exit_btn.add_theme_stylebox_override("pressed", sb)
+	_exit_btn.anchor_left   = 1.0; _exit_btn.anchor_right  = 1.0
+	_exit_btn.anchor_top    = 0.0; _exit_btn.anchor_bottom = 0.0
+	_exit_btn.offset_left   = -96; _exit_btn.offset_right  = -8
+	_exit_btn.offset_top    = 8;   _exit_btn.offset_bottom = 48
+	_exit_btn.pressed.connect(_on_exit_pressed)
+	add_child(_exit_btn)
+
+	# Confirmation dialog (embedded subwindow — renders inside the canvas on web/mobile).
+	_exit_dialog = ConfirmationDialog.new()
+	_exit_dialog.title         = "Leave match"
+	_exit_dialog.dialog_text   = "Leave the match and return to the menu?"
+	_exit_dialog.ok_button_text = "Leave"
+	_exit_dialog.get_cancel_button().text = "Stay"
+	_exit_dialog.confirmed.connect(_do_exit)
+	# Re-capture the mouse on desktop if the player decides to stay.
+	_exit_dialog.canceled.connect(func():
+		if not OS.has_feature("web"):
+			Input.mouse_mode = Input.MOUSE_MODE_CAPTURED)
+	add_child(_exit_dialog)
+
+func _on_exit_pressed() -> void:
+	if _exit_dialog == null: return
+	# Free the cursor so the dialog buttons are clickable on desktop (mouse is
+	# captured during play); on web/mobile the cursor is already free.
+	if not OS.has_feature("web"):
+		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+	_exit_dialog.popup_centered()
+
+func _do_exit() -> void:
+	if multiplayer.has_multiplayer_peer():
+		multiplayer.multiplayer_peer.close()
+	get_tree().paused = false
+	get_tree().reload_current_scene()
 
 # ── Win overlay ───────────────────────────────────────────────────────────────
 func _build_overlay() -> void:
@@ -853,10 +906,9 @@ func _input(event: InputEvent) -> void:
 	if event is InputEventKey and event.pressed and not event.echo:
 		if event.keycode == KEY_R:
 			get_tree().reload_current_scene()
-		elif event.keycode == KEY_ESCAPE and not OS.has_feature("web"):
-			if multiplayer.has_multiplayer_peer():
-				multiplayer.multiplayer_peer.close()
-			get_tree().quit()
+		elif event.keycode == KEY_ESCAPE:
+			# Open the leave-match confirmation instead of quitting outright.
+			_on_exit_pressed()
 
 	# Touch controls
 	if not _is_mobile_device(): return
