@@ -124,18 +124,65 @@ func _create_maze() -> void:
 	ceil_mesh.position = Vector3(cols * cs / 2.0, wall_h, rows * cs / 2.0)
 	ceil_mesh.rotation.x = PI; maze_node.add_child(ceil_mesh)
 
+	# ── Visuals: ONE MultiMesh draw call for every wall ───────────────────────
+	# Previously each wall cell was a CSGBox3D. CSG geometry is rebuilt on the CPU
+	# at runtime; with a 27×27 maze that is hundreds of CSG nodes, which tanks the
+	# framerate on mobile web — worst when walls fill the view (i.e. up close).
+	# The low, lurching framerate is what made turning feel abrupt and chaotic.
+	# A MultiMeshInstance3D renders all walls in a single draw call instead.
+	var wall_cells: Array = []
 	for r in range(rows):
 		for c in range(cols):
 			if grid[r][c] == 1:
-				var wall_body = StaticBody3D.new()
-				wall_body.position = Vector3((c + 0.5) * cs, wall_h / 2.0, (r + 0.5) * cs)
-				maze_node.add_child(wall_body)
-				var wall_vis = CSGBox3D.new()
-				wall_vis.size = Vector3(cs, wall_h, cs); wall_vis.material = wall_mat
-				wall_body.add_child(wall_vis)
-				var col_shape = CollisionShape3D.new()
-				var box_shape = BoxShape3D.new(); box_shape.size = Vector3(cs, wall_h, cs)
-				col_shape.shape = box_shape; wall_body.add_child(col_shape)
+				wall_cells.append(Vector3((c + 0.5) * cs, wall_h / 2.0, (r + 0.5) * cs))
+
+	if wall_cells.size() > 0:
+		var box_mesh = BoxMesh.new()
+		box_mesh.size = Vector3(cs, wall_h, cs)
+		var mm = MultiMesh.new()
+		mm.transform_format = MultiMesh.TRANSFORM_3D
+		mm.mesh = box_mesh
+		mm.instance_count = wall_cells.size()
+		for i in range(wall_cells.size()):
+			mm.set_instance_transform(i, Transform3D(Basis(), wall_cells[i]))
+		var mmi = MultiMeshInstance3D.new()
+		mmi.multimesh = mm
+		mmi.material_override = wall_mat
+		maze_node.add_child(mmi)
+
+	# ── Collision: greedy-merge wall cells into seamless rectangles ────────────
+	# One BoxShape per merged rectangle removes the internal seams between flush
+	# per-cell boxes that caused the capsule to catch ("ghost collisions") when
+	# sliding along a wall — the source of the chaotic turn-while-moving jitter.
+	var used: Array = []
+	for r in range(rows):
+		var row_used: Array = []
+		for c in range(cols): row_used.append(false)
+		used.append(row_used)
+
+	for r in range(rows):
+		for c in range(cols):
+			if grid[r][c] != 1 or used[r][c]: continue
+			# Extend width along the row.
+			var w := 1
+			while c + w < cols and grid[r][c + w] == 1 and not used[r][c + w]: w += 1
+			# Extend height while the full w-wide segment is wall & unused.
+			var h := 1
+			var grow := true
+			while grow and r + h < rows:
+				for cc in range(c, c + w):
+					if grid[r + h][cc] != 1 or used[r + h][cc]: grow = false; break
+				if grow: h += 1
+			# Mark the rectangle consumed.
+			for rr in range(r, r + h):
+				for cc in range(c, c + w): used[rr][cc] = true
+			# One static collider for the whole rectangle.
+			var wall_body = StaticBody3D.new()
+			wall_body.position = Vector3((c + w / 2.0) * cs, wall_h / 2.0, (r + h / 2.0) * cs)
+			maze_node.add_child(wall_body)
+			var col_shape = CollisionShape3D.new()
+			var box_shape = BoxShape3D.new(); box_shape.size = Vector3(w * cs, wall_h, h * cs)
+			col_shape.shape = box_shape; wall_body.add_child(col_shape)
 
 # ── Map materials ─────────────────────────────────────────────────────────────
 func _make_wall_material(map_id: int) -> Material:

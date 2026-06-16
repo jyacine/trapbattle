@@ -810,8 +810,12 @@ func _input(event: InputEvent) -> void:
 			get_viewport().set_input_as_handled()
 		elif event.index == _look_id:
 			var sens: float = player.mouse_sensitivity * 1.8
-			player._pending_yaw_delta -= drag.relative.x * sens
-			player.pitch = clamp(player.pitch - drag.relative.y * sens, -PI / 3.0, PI / 3.0)
+			# Clamp a single (possibly browser-coalesced) drag delta so a frame
+			# hitch near a wall can't deliver one huge lump that snaps the view.
+			var dx := clampf(drag.relative.x, -45.0, 45.0)
+			var dy := clampf(drag.relative.y, -45.0, 45.0)
+			player._pending_yaw_delta -= dx * sens
+			player.pitch = clamp(player.pitch - dy * sens, -PI / 3.0, PI / 3.0)
 			if player.camera_node:
 				player.camera_node.rotation.x = player.pitch
 			get_viewport().set_input_as_handled()

@@ -21,6 +21,9 @@ var player_radius:     float = Config.PLAYER_RADIUS
 var yaw:               float = 0.0
 var pitch:             float = 0.0
 var _pending_yaw_delta: float = 0.0
+# Higher = snappier/more responsive look, lower = smoother but laggier.
+# ~25 drains a spike over ~3-4 physics frames while staying responsive.
+const LOOK_SMOOTH_RATE := 25.0
 
 # ── Camera ───────────────────────────────────────────────────────────────────
 var camera_node: Camera3D
@@ -65,6 +68,16 @@ var _viewmodel_root: Node3D = null
 var _vm_sway_time:   float  = 0.0
 var _vm_recoil:      float  = 0.0
 
+# ── Debug overlay (toggle with F3; on by default so it shows on mobile) ────────
+var _dbg_label:       Label = null
+var _dbg_yaw_step:    float = 0.0   # yaw applied this physics frame (rad)
+var _dbg_last_yaw:    float = 0.0
+var _dbg_slides:      int   = 0     # slide-collision count from last move_and_slide
+var _dbg_real_speed:  float = 0.0   # actual speed after sliding
+var _dbg_worst_ft:    float = 0.0   # worst frame time in current 1s window (ms)
+var _dbg_shown_worst: float = 0.0
+var _dbg_window:      float = 1.0
+
 # ── Backward-compat alias (robot.gd / old callers) ───────────────────────────
 var robot_ref: Node3D  # unused in N-player but kept so existing robot.gd compiles
 
@@ -78,6 +91,7 @@ func _ready() -> void:
 	var col = CollisionShape3D.new()
 	var cap = CapsuleShape3D.new()
 	cap.radius = player_radius; cap.height = 1.8
+	cap.margin = 0.04   # wider depenetration margin → more forgiving wall sliding
 	col.shape  = cap
 	add_child(col)
 
@@ -87,11 +101,12 @@ func _ready() -> void:
 		# Free-floating physics movement (zero gravity, no floor) — let the engine
 		# slide us smoothly along wall colliders instead of grid axis-separation.
 		motion_mode = CharacterBody3D.MOTION_MODE_FLOATING
-		wall_min_slide_angle = 0.0
+		wall_min_slide_angle = deg_to_rad(15.0)   # ignore near-perpendicular ghost normals
 		camera_node = Camera3D.new()
 		camera_node.position = Vector3(0, 1.6, 0)
 		add_child(camera_node)
 		_build_viewmodel()
+		_build_debug_overlay()
 		_teleport_to(spawn_cell)
 		if not OS.has_feature("web"):
 			Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
@@ -111,8 +126,16 @@ func _physics_process(delta: float) -> void:
 	_pickup_cooldown = max(0.0, _pickup_cooldown - delta)
 	_gun_cooldown    = max(0.0, _gun_cooldown    - delta)
 
-	yaw += _pending_yaw_delta
-	_pending_yaw_delta = 0.0
+	# Smooth look-turn: apply a fraction of the accumulated delta each physics
+	# frame and carry the rest, so a single large (coalesced) touch drag near a
+	# wall decays over a few frames instead of snapping the view in one step.
+	# Frame-rate aware so the feel is the same at any FPS.
+	var look_blend := 1.0 - exp(-LOOK_SMOOTH_RATE * delta)
+	var look_step  := _pending_yaw_delta * look_blend
+	yaw += look_step
+	_pending_yaw_delta -= look_step
+	if absf(_pending_yaw_delta) < 0.0001:
+		_pending_yaw_delta = 0.0   # snap-drain the tail to avoid lingering drift
 
 	if game_manager.respawning.get(peer_id, false):
 		_teleport_to(game_manager.get_spawn_for_index(player_index))
@@ -126,6 +149,10 @@ func _physics_process(delta: float) -> void:
 	if is_confused: turn_dir = -turn_dir
 	yaw += turn_dir
 	rotation.y = yaw
+
+	# Debug: how much yaw was applied this single physics frame (deg shown later).
+	_dbg_yaw_step = wrapf(yaw - _dbg_last_yaw, -PI, PI)
+	_dbg_last_yaw = yaw
 
 	var can_move = not (game_manager.has_effect(peer_id, "glue") or
 	                    game_manager.has_effect(peer_id, "cage") or
@@ -154,6 +181,8 @@ func _physics_process(delta: float) -> void:
 		# Physics-driven movement: smooth wall sliding, no jitter.
 		velocity = dir * move_speed * speed_mult
 		move_and_slide()
+		_dbg_slides     = get_slide_collision_count()
+		_dbg_real_speed = velocity.length()
 
 		if dir.length_squared() > 0.0001:
 			# Footstep sound
@@ -205,6 +234,8 @@ func _input(event: InputEvent) -> void:
 				if OS.has_feature("web"): Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 				else: get_tree().quit()
 			KEY_R: get_tree().reload_current_scene()
+			KEY_F3:
+				if _dbg_label: _dbg_label.visible = not _dbg_label.visible
 
 # ── Gun ───────────────────────────────────────────────────────────────────────
 func _fire_gun() -> void:
@@ -357,6 +388,9 @@ func _update_hp3_bar() -> void:
 # ── Utility ──────────────────────────────────────────────────────────────────
 func _teleport_to(cell: Array) -> void:
 	position = game_manager.grid_to_world(cell); current_grid_pos = cell.duplicate()
+	# With physics interpolation on, a direct position set would smear the camera
+	# across the map for one frame — reset so spawns/respawns snap cleanly.
+	reset_physics_interpolation()
 
 func get_grid_position() -> Array:
 	# Compute from actual world position so remote players show correctly on the minimap.
@@ -418,6 +452,34 @@ func _build_viewmodel() -> void:
 	# Forearm receding toward the bottom-right corner of the screen
 	var arm = _vm_box(Vector3(0.130, 0.130, 0.300), Vector3( 0.060, -0.230,  0.230), skin)
 	arm.rotation_degrees = Vector3(28.0, -10.0, 6.0)
+
+# ── Debug overlay ─────────────────────────────────────────────────────────────
+func _build_debug_overlay() -> void:
+	var layer := CanvasLayer.new()
+	layer.layer = 128
+	add_child(layer)
+	_dbg_label = Label.new()
+	_dbg_label.position = Vector2(12, 12)
+	_dbg_label.add_theme_font_size_override("font_size", 18)
+	_dbg_label.add_theme_color_override("font_color", Color(0.4, 1.0, 0.4))
+	_dbg_label.add_theme_color_override("font_outline_color", Color(0, 0, 0))
+	_dbg_label.add_theme_constant_override("outline_size", 6)
+	layer.add_child(_dbg_label)
+
+func _process(delta: float) -> void:
+	if _dbg_label == null or not _dbg_label.visible:
+		return
+	var ft := delta * 1000.0
+	if ft > _dbg_worst_ft: _dbg_worst_ft = ft
+	_dbg_window -= delta
+	if _dbg_window <= 0.0:
+		_dbg_shown_worst = _dbg_worst_ft
+		_dbg_worst_ft = 0.0
+		_dbg_window = 1.0
+	_dbg_label.text = "FPS %d   dt %.1fms   worst %.1fms\nturn/frame %.2f deg   slides %d   spd %.2f\npos %.1f, %.1f" % [
+		Engine.get_frames_per_second(), ft, _dbg_shown_worst,
+		rad_to_deg(_dbg_yaw_step), _dbg_slides, _dbg_real_speed,
+		position.x, position.z]
 
 func _vm_box(size: Vector3, pos: Vector3, mat: StandardMaterial3D) -> MeshInstance3D:
 	var mi := MeshInstance3D.new()
