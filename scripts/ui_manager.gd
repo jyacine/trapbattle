@@ -599,10 +599,10 @@ func _build_mobile_buttons() -> void:
 	_joy_knob_nd = _circle_panel(_JOY_KNOB, Color(0.72, 0.74, 0.80, 0.72), Color(1.0, 1.0, 1.0, 0.88), 2)
 	add_child(_joy_knob_nd)
 
-	# FIRE button — gun icon, right side, vertically centred
+	# FIRE button — gun icon, right side, ~72% down (PUBG-style)
 	_fire_nd = _action_image_button(FSZ, "res://assets/icons/icon_gun.svg")
 	_fire_nd.anchor_left   = 1.0; _fire_nd.anchor_right  = 1.0
-	_fire_nd.anchor_top    = 0.5; _fire_nd.anchor_bottom = 0.5
+	_fire_nd.anchor_top    = 0.72; _fire_nd.anchor_bottom = 0.72
 	_fire_nd.offset_left   = -(FSZ + MG); _fire_nd.offset_right  = -MG
 	_fire_nd.offset_top    = -FSZ * 0.5;  _fire_nd.offset_bottom = FSZ * 0.5
 	add_child(_fire_nd)
@@ -610,7 +610,7 @@ func _build_mobile_buttons() -> void:
 	# TRAP button — bomb icon, above fire button, same right edge
 	_trap_nd = _action_image_button(TSZ, "res://assets/icons/icon_bomb.svg")
 	_trap_nd.anchor_left   = 1.0; _trap_nd.anchor_right  = 1.0
-	_trap_nd.anchor_top    = 0.5; _trap_nd.anchor_bottom = 0.5
+	_trap_nd.anchor_top    = 0.72; _trap_nd.anchor_bottom = 0.72
 	_trap_nd.offset_left   = -(TSZ + MG); _trap_nd.offset_right  = -MG
 	_trap_nd.offset_top    = -(FSZ * 0.5 + MG + TSZ); _trap_nd.offset_bottom = -(FSZ * 0.5 + MG)
 	add_child(_trap_nd)
@@ -620,8 +620,9 @@ func _build_mobile_buttons() -> void:
 		var vm = get_parent().get_node_or_null("VoiceManager") as VoiceManager
 		if vm:
 			const VSZ := 68.0
-			# Trap top = -(FSZ*0.5 + MG + TSZ); voice sits MG above that
+			# Trap top = -(FSZ*0.5 + MG + TSZ); voice sits 12px above that
 			var v_bot := -(FSZ * 0.5 + MG + TSZ + 12)
+			# (anchor_top = 0.72 matches fire/trap buttons)
 			var btn_voice = Button.new()
 			btn_voice.text = "🎤\nON"
 			btn_voice.add_theme_font_size_override("font_size", 14)
@@ -633,7 +634,7 @@ func _build_mobile_buttons() -> void:
 			btn_voice.add_theme_stylebox_override("normal", vsb)
 			btn_voice.add_theme_stylebox_override("pressed", vsb)
 			btn_voice.anchor_left   = 1.0; btn_voice.anchor_right  = 1.0
-			btn_voice.anchor_top    = 0.5; btn_voice.anchor_bottom = 0.5
+			btn_voice.anchor_top    = 0.72; btn_voice.anchor_bottom = 0.72
 			btn_voice.offset_right  = -MG
 			btn_voice.offset_left   = -(VSZ + MG)
 			btn_voice.offset_top    = v_bot - VSZ
