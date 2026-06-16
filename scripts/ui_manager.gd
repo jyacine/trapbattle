@@ -644,11 +644,15 @@ func _build_mobile_buttons() -> void:
 			)
 			vm.voice_button = btn_voice
 
-# Filled circle panel with a vector icon drawn on top (no font/emoji dependency,
-# so the icons render identically on every device — phones often lack an emoji
-# font and showed the old 🔫 / 💣 glyphs as empty boxes).
-func _action_icon_circle(size: float, col: Color, icon_kind: String) -> Panel:
-	var p = _circle_panel(size, col, col.lightened(0.30), 3)
+# Transparent hit-area panel with a vector icon drawn on top. No background
+# circle — icons float directly on the HUD like standard game action buttons.
+func _action_icon_circle(size: float, _col: Color, icon_kind: String) -> Panel:
+	var p = Panel.new()
+	p.custom_minimum_size = Vector2(size, size)
+	var sb = StyleBoxFlat.new()
+	sb.bg_color = Color(0, 0, 0, 0)
+	p.add_theme_stylebox_override("panel", sb)
+	p.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	var icon = Control.new()
 	icon.custom_minimum_size = Vector2(size, size)
 	icon.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -657,31 +661,46 @@ func _action_icon_circle(size: float, col: Color, icon_kind: String) -> Panel:
 	p.add_child(icon)
 	return p
 
-# Draws a simple gun or bomb glyph filling `ctrl`. Coordinates are normalised to
-# the control's size so the same icon scales to any button diameter.
+# Draws a coloured gun or bomb icon with a drop shadow for legibility on any
+# background. Coordinates normalised to the control's size — scales to any diameter.
 func _draw_action_icon(ctrl: Control, kind: String) -> void:
 	var w: float = ctrl.size.x
 	var h: float = ctrl.size.y
 	if w <= 0.0 or h <= 0.0: return
-	var white := Color(1, 1, 1, 0.96)
+	var shadow := Color(0, 0, 0, 0.70)
+	var so := Vector2(w * 0.04, h * 0.04)
 	if kind == "gun":
-		# Slide / barrel (points right), front sight, trigger guard, angled grip.
-		ctrl.draw_rect(Rect2(w * 0.16, h * 0.40, w * 0.70, h * 0.14), white)
-		ctrl.draw_rect(Rect2(w * 0.80, h * 0.35, w * 0.06, h * 0.06), white)
-		ctrl.draw_rect(Rect2(w * 0.42, h * 0.54, w * 0.05, h * 0.12), white)
+		var col := Color(1.0, 0.55, 0.05, 1.0)
+		# Drop shadow
+		ctrl.draw_rect(Rect2(w*0.16+so.x, h*0.40+so.y, w*0.70, h*0.14), shadow)
+		ctrl.draw_rect(Rect2(w*0.80+so.x, h*0.35+so.y, w*0.06, h*0.06), shadow)
+		ctrl.draw_rect(Rect2(w*0.42+so.x, h*0.54+so.y, w*0.05, h*0.12), shadow)
 		ctrl.draw_colored_polygon(PackedVector2Array([
-			Vector2(w * 0.28, h * 0.54),
-			Vector2(w * 0.46, h * 0.54),
-			Vector2(w * 0.40, h * 0.80),
-			Vector2(w * 0.22, h * 0.80),
-		]), white)
+			Vector2(w*0.28+so.x, h*0.54+so.y), Vector2(w*0.46+so.x, h*0.54+so.y),
+			Vector2(w*0.40+so.x, h*0.80+so.y), Vector2(w*0.22+so.x, h*0.80+so.y),
+		]), shadow)
+		# Icon — orange gun
+		ctrl.draw_rect(Rect2(w*0.16, h*0.40, w*0.70, h*0.14), col)
+		ctrl.draw_rect(Rect2(w*0.80, h*0.35, w*0.06, h*0.06), col)
+		ctrl.draw_rect(Rect2(w*0.42, h*0.54, w*0.05, h*0.12), col)
+		ctrl.draw_colored_polygon(PackedVector2Array([
+			Vector2(w*0.28, h*0.54), Vector2(w*0.46, h*0.54),
+			Vector2(w*0.40, h*0.80), Vector2(w*0.22, h*0.80),
+		]), col)
 	elif kind == "bomb":
-		# Round body, fuse cap, curved fuse, lit spark.
-		ctrl.draw_circle(Vector2(w * 0.50, h * 0.60), w * 0.25, white)
-		ctrl.draw_rect(Rect2(w * 0.44, h * 0.29, w * 0.12, h * 0.09), white)
-		ctrl.draw_line(Vector2(w * 0.50, h * 0.30), Vector2(w * 0.66, h * 0.16),
-			white, maxf(2.0, w * 0.035))
-		ctrl.draw_circle(Vector2(w * 0.68, h * 0.13), w * 0.07, Color(1.0, 0.72, 0.12, 0.98))
+		var col   := Color(1.0, 1.0, 1.0, 1.0)
+		var spark := Color(1.0, 0.72, 0.12, 1.0)
+		var lw    := maxf(2.0, w * 0.04)
+		# Drop shadow
+		ctrl.draw_circle(Vector2(w*0.50+so.x, h*0.60+so.y), w*0.25, shadow)
+		ctrl.draw_rect(Rect2(w*0.44+so.x, h*0.29+so.y, w*0.12, h*0.09), shadow)
+		ctrl.draw_line(Vector2(w*0.50+so.x, h*0.30+so.y), Vector2(w*0.66+so.x, h*0.16+so.y), shadow, lw)
+		ctrl.draw_circle(Vector2(w*0.68+so.x, h*0.13+so.y), w*0.07, shadow)
+		# Icon — white bomb body, orange spark
+		ctrl.draw_circle(Vector2(w*0.50, h*0.60), w*0.25, col)
+		ctrl.draw_rect(Rect2(w*0.44, h*0.29, w*0.12, h*0.09), col)
+		ctrl.draw_line(Vector2(w*0.50, h*0.30), Vector2(w*0.66, h*0.16), col, lw)
+		ctrl.draw_circle(Vector2(w*0.68, h*0.13), w*0.07, spark)
 
 func _circle_panel(size: float, fill: Color, border: Color, bw: int) -> Panel:
 	var p = Panel.new()
