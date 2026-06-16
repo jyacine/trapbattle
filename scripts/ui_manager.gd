@@ -585,7 +585,7 @@ func _build_blind_overlay() -> void:
 # ── Mobile controls (phone / web) ────────────────────────────────────────────
 func _build_mobile_buttons() -> void:
 	if player == null: return
-	if not (_is_mobile_device() or OS.has_feature("web")): return
+	if not _is_mobile_device(): return
 
 	const FSZ := 120.0   # fire button diameter
 	const TSZ :=  90.0   # trap button diameter
@@ -758,7 +758,7 @@ func _input(event: InputEvent) -> void:
 			get_tree().quit()
 
 	# Touch controls
-	if not (_is_mobile_device() or OS.has_feature("web")): return
+	if not _is_mobile_device(): return
 	if player == null or not game_manager.is_playing: return
 
 	var vp_hw: float = get_viewport().get_visible_rect().size.x * 0.5
