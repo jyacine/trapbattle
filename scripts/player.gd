@@ -166,6 +166,8 @@ func _physics_process(delta: float) -> void:
 		var strafe := 0.0
 		if Input.is_action_pressed("ui_up")   or Input.is_key_pressed(KEY_W): drive  += 1.0
 		if Input.is_action_pressed("ui_down") or Input.is_key_pressed(KEY_S): drive  -= 1.0
+		if Input.is_key_pressed(KEY_LEFT):  strafe -= 1.0
+		if Input.is_key_pressed(KEY_RIGHT): strafe += 1.0
 		drive  += touch_move_y
 		strafe += touch_move_x
 		if is_confused:
@@ -464,6 +466,7 @@ func _build_debug_overlay() -> void:
 	_dbg_label.add_theme_color_override("font_color", Color(0.4, 1.0, 0.4))
 	_dbg_label.add_theme_color_override("font_outline_color", Color(0, 0, 0))
 	_dbg_label.add_theme_constant_override("outline_size", 6)
+	_dbg_label.visible = false
 	layer.add_child(_dbg_label)
 
 func _process(delta: float) -> void:
