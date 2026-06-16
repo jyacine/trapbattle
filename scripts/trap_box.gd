@@ -10,8 +10,8 @@ var trap_type: int        = 0
 var current_grid_pos: Array = [0, 0]
 
 # ── Visuals ───────────────────────────────────────────────────────────────────
-var _box_mesh: CSGBox3D
-var _lid_mesh: CSGBox3D
+var _box_mesh: MeshInstance3D
+var _lid_mesh: MeshInstance3D
 var _box_mat: StandardMaterial3D
 var _lid_mat: StandardMaterial3D
 var _light: OmniLight3D
@@ -109,10 +109,11 @@ func _build_visual() -> void:
 	_box_mat.emission_energy_multiplier = 0.4
 	_box_mat.roughness                  = 0.7
 
-	_box_mesh = CSGBox3D.new()
-	_box_mesh.size     = Vector3(0.5, 0.45, 0.5)
-	_box_mesh.position = Vector3(0, 0.3, 0)
-	_box_mesh.material = _box_mat
+	_box_mesh = MeshInstance3D.new()
+	var box_bm = BoxMesh.new(); box_bm.size = Vector3(0.5, 0.45, 0.5)
+	_box_mesh.mesh              = box_bm
+	_box_mesh.position          = Vector3(0, 0.3, 0)
+	_box_mesh.material_override = _box_mat
 	add_child(_box_mesh)
 
 	# Lid (slightly wider)
@@ -123,10 +124,11 @@ func _build_visual() -> void:
 	_lid_mat.emission_energy_multiplier = 0.6
 	_lid_mat.roughness                  = 0.5
 
-	_lid_mesh = CSGBox3D.new()
-	_lid_mesh.size     = Vector3(0.54, 0.10, 0.54)
-	_lid_mesh.position = Vector3(0, 0.62, 0)
-	_lid_mesh.material = _lid_mat
+	_lid_mesh = MeshInstance3D.new()
+	var lid_bm = BoxMesh.new(); lid_bm.size = Vector3(0.54, 0.10, 0.54)
+	_lid_mesh.mesh              = lid_bm
+	_lid_mesh.position          = Vector3(0, 0.62, 0)
+	_lid_mesh.material_override = _lid_mat
 	add_child(_lid_mesh)
 
 	# Floating label

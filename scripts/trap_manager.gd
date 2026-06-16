@@ -226,13 +226,10 @@ func _spawn_turret(pos: Vector3, owner_pid: int) -> void:
 	mat.emission                   = Color(0.8, 0.0, 0.8)
 	mat.emission_energy_multiplier = 1.0
 
-	var body = CSGBox3D.new()
-	body.size = Vector3(0.25, 0.4, 0.25); body.position = Vector3(0, 0.25, 0); body.material = mat
-	node.add_child(body)
+	node.add_child(_mesh_box(Vector3(0.25, 0.4, 0.25), Vector3(0, 0.25, 0), mat))
 
-	var barrel = CSGCylinder3D.new()
-	barrel.radius = 0.04; barrel.height = 0.35
-	barrel.position = Vector3(0, 0.45, 0.18); barrel.rotation.x = PI / 2.0; barrel.material = mat
+	var barrel = _mesh_cyl(0.04, 0.35, Vector3(0, 0.45, 0.18), mat)
+	barrel.rotation.x = PI / 2.0
 	node.add_child(barrel)
 
 	var light = OmniLight3D.new()
@@ -247,15 +244,13 @@ func _spawn_turret(pos: Vector3, owner_pid: int) -> void:
 func _spawn_fire_zone(pos: Vector3) -> void:
 	var fire_node = Node3D.new(); fire_node.position = pos + Vector3(0, 0.1, 0)
 
-	var cyl = CSGCylinder3D.new()
-	cyl.radius = Config.CELL_SIZE * 0.7; cyl.height = 0.3
 	var mat = StandardMaterial3D.new()
 	mat.albedo_color               = Color(1.0, 0.3, 0.0, 0.7)
 	mat.emission_enabled           = true
 	mat.emission                   = Color(1.0, 0.2, 0.0)
 	mat.emission_energy_multiplier = 2.0
 	mat.transparency               = BaseMaterial3D.TRANSPARENCY_ALPHA
-	cyl.material = mat; fire_node.add_child(cyl)
+	fire_node.add_child(_mesh_cyl(Config.CELL_SIZE * 0.7, 0.3, Vector3.ZERO, mat))
 
 	var light = OmniLight3D.new()
 	light.light_color = Color(1.0, 0.4, 0.0); light.light_energy = 3.0
@@ -294,9 +289,7 @@ func _spawn_cage(target_pid: int) -> void:
 
 	for bp in [Vector3(-0.7, 0.9, 0), Vector3(0.7, 0.9, 0),
 	           Vector3(0, 0.9, -0.7), Vector3(0, 0.9, 0.7)]:
-		var bar = CSGBox3D.new()
-		bar.size = Vector3(0.08, 1.8, 0.08); bar.position = bp; bar.material = bar_mat
-		cage_node.add_child(bar)
+		cage_node.add_child(_mesh_box(Vector3(0.08, 1.8, 0.08), bp, bar_mat))
 
 	get_parent().add_child(cage_node)
 	_cages.append({ "node": cage_node, "target_pid": target_pid, "timer": 5.0 })
@@ -411,54 +404,62 @@ func _mat(col: Color, emit_mult: float = 1.0) -> StandardMaterial3D:
 	m.roughness = 0.4
 	return m
 
+# ── Mesh builders (replace runtime CSG, which is far too heavy on mobile) ──────
+func _mesh_box(size: Vector3, pos: Vector3, mat: Material) -> MeshInstance3D:
+	var mi := MeshInstance3D.new()
+	var bm := BoxMesh.new(); bm.size = size
+	mi.mesh = bm; mi.material_override = mat; mi.position = pos
+	return mi
+
+func _mesh_sphere(radius: float, pos: Vector3, mat: Material) -> MeshInstance3D:
+	var mi := MeshInstance3D.new()
+	var sm := SphereMesh.new()
+	sm.radius = radius; sm.height = radius * 2.0
+	sm.radial_segments = 16; sm.rings = 8
+	mi.mesh = sm; mi.material_override = mat; mi.position = pos
+	return mi
+
+func _mesh_cyl(radius: float, height: float, pos: Vector3, mat: Material) -> MeshInstance3D:
+	var mi := MeshInstance3D.new()
+	var cm := CylinderMesh.new()
+	cm.top_radius = radius; cm.bottom_radius = radius; cm.height = height
+	cm.radial_segments = 16
+	mi.mesh = cm; mi.material_override = mat; mi.position = pos
+	return mi
+
 func _make_trap_icon(trap_type: int, col: Color) -> Node3D:
 	var icon = Node3D.new()
 
 	match trap_type:
 		Config.TrapType.PITFALL:
-			var pit = CSGCylinder3D.new()
-			pit.radius = 0.19; pit.height = 0.05; pit.position = Vector3(0, 0.03, 0)
-			pit.material = _mat(Color(0.04, 0.02, 0.02), 0.15); icon.add_child(pit)
+			icon.add_child(_mesh_cyl(0.19, 0.05, Vector3(0, 0.03, 0), _mat(Color(0.04, 0.02, 0.02), 0.15)))
 			var warn = MeshInstance3D.new()
 			var wtorus = TorusMesh.new(); wtorus.inner_radius = 0.19; wtorus.outer_radius = 0.30
 			warn.mesh = wtorus; warn.position = Vector3(0, 0.03, 0)
 			warn.set_surface_override_material(0, _mat(Color(1.0, 0.82, 0.0), 2.0)); icon.add_child(warn)
-			var spike = CSGCylinder3D.new()
-			spike.radius = 0.06; spike.height = 0.26; spike.position = Vector3(0, 0.16, 0)
-			spike.material = _mat(col.darkened(0.35), 0.7); icon.add_child(spike)
+			icon.add_child(_mesh_cyl(0.06, 0.26, Vector3(0, 0.16, 0), _mat(col.darkened(0.35), 0.7)))
 
 		Config.TrapType.BOMB:
-			var body = CSGSphere3D.new()
-			body.radius = 0.22; body.position = Vector3(0, 0.24, 0)
-			body.material = _mat(Color(0.08, 0.08, 0.10), 0.15); icon.add_child(body)
-			var fuse = CSGCylinder3D.new()
-			fuse.radius = 0.022; fuse.height = 0.24
-			fuse.position = Vector3(0.07, 0.50, 0); fuse.rotation.z = -0.55
-			fuse.material = _mat(Color(0.48, 0.32, 0.08), 0.3); icon.add_child(fuse)
-			var spark = CSGSphere3D.new()
-			spark.radius = 0.06; spark.position = Vector3(0.14, 0.62, 0)
-			spark.material = _mat(Color(1.0, 0.65, 0.05), 5.0); icon.add_child(spark)
+			icon.add_child(_mesh_sphere(0.22, Vector3(0, 0.24, 0), _mat(Color(0.08, 0.08, 0.10), 0.15)))
+			var fuse = _mesh_cyl(0.022, 0.24, Vector3(0.07, 0.50, 0), _mat(Color(0.48, 0.32, 0.08), 0.3))
+			fuse.rotation.z = -0.55; icon.add_child(fuse)
+			icon.add_child(_mesh_sphere(0.06, Vector3(0.14, 0.62, 0), _mat(Color(1.0, 0.65, 0.05), 5.0)))
 
 		Config.TrapType.SPIKE:
 			var sm = _mat(Color(0.70, 0.72, 0.78), 0.5); sm.metallic = 0.85; sm.roughness = 0.15
 			for sp in [Vector3(0,0,0), Vector3(0.16,0,0.10), Vector3(-0.16,0,0.10),
 			           Vector3(0.10,0,-0.15), Vector3(-0.10,0,-0.15)]:
-				var cone = CSGCylinder3D.new()
-				cone.radius = 0.044; cone.height = 0.44
-				cone.position = sp + Vector3(0, 0.22, 0); cone.material = sm; icon.add_child(cone)
+				icon.add_child(_mesh_cyl(0.044, 0.44, sp + Vector3(0, 0.22, 0), sm))
 
 		Config.TrapType.FREEZE:
 			var im = _mat(Color(0.55, 0.82, 1.0), 2.0); im.metallic = 0.2; im.roughness = 0.05
 			for i in 3:
 				var ry = i * PI / 3.0
-				var arm = CSGBox3D.new()
-				arm.size = Vector3(0.06, 0.48, 0.06); arm.position = Vector3(0, 0.25, 0)
-				arm.rotation.y = ry; arm.material = im; icon.add_child(arm)
+				var arm = _mesh_box(Vector3(0.06, 0.48, 0.06), Vector3(0, 0.25, 0), im)
+				arm.rotation.y = ry; icon.add_child(arm)
 				for offset in [-0.12, 0.12]:
-					var cross = CSGBox3D.new()
-					cross.size = Vector3(0.22, 0.05, 0.05)
-					cross.position = Vector3(0, 0.25 + offset, 0)
-					cross.rotation.y = ry; cross.material = im; icon.add_child(cross)
+					var cross = _mesh_box(Vector3(0.22, 0.05, 0.05), Vector3(0, 0.25 + offset, 0), im)
+					cross.rotation.y = ry; icon.add_child(cross)
 
 		Config.TrapType.TELEPORT:
 			var pm = _mat(col, 2.5)
@@ -467,29 +468,24 @@ func _make_trap_icon(trap_type: int, col: Color) -> Node3D:
 				var torus = TorusMesh.new(); torus.inner_radius = 0.11; torus.outer_radius = 0.24
 				r.mesh = torus; r.position = Vector3(0, 0.27, 0); r.rotation.x = rx
 				r.set_surface_override_material(0, pm); icon.add_child(r)
-			var core = CSGSphere3D.new()
-			core.radius = 0.08; core.position = Vector3(0, 0.27, 0)
-			core.material = _mat(col.lightened(0.55), 4.0); icon.add_child(core)
+			icon.add_child(_mesh_sphere(0.08, Vector3(0, 0.27, 0), _mat(col.lightened(0.55), 4.0)))
 
 		Config.TrapType.CONFUSION:
 			for i in 6:
 				var t  = float(i) / 6.0; var a = t * TAU
 				var rs = 0.10 + t * 0.06; var ys = 0.06 + t * 0.38
-				var orb = CSGSphere3D.new()
-				orb.radius = 0.065 - t * 0.01
-				orb.position = Vector3(cos(a) * rs, ys, sin(a) * rs)
-				orb.material = _mat(col.lerp(col.lightened(0.5), t), 1.6 + t * 0.8); icon.add_child(orb)
+				icon.add_child(_mesh_sphere(0.065 - t * 0.01,
+					Vector3(cos(a) * rs, ys, sin(a) * rs),
+					_mat(col.lerp(col.lightened(0.5), t), 1.6 + t * 0.8)))
 
 		Config.TrapType.FIRE_BURST:
 			var flame_pos = [Vector3(0,0,0), Vector3(0.14,0,0.06),
 			                 Vector3(-0.12,0,0.08), Vector3(0.06,0,0.16), Vector3(-0.08,0,0.15)]
 			var flame_h   = [0.40, 0.35, 0.42, 0.34, 0.38]
 			for i in flame_pos.size():
-				var fc    = col.lerp(Color(1.0, 0.38, 0.0), float(i) / 4.0)
-				var flame = CSGCylinder3D.new()
-				flame.radius = 0.058; flame.height = flame_h[i]
-				flame.position = flame_pos[i] + Vector3(0, flame_h[i] / 2.0, 0)
-				flame.material = _mat(fc, 2.8); icon.add_child(flame)
+				var fc = col.lerp(Color(1.0, 0.38, 0.0), float(i) / 4.0)
+				icon.add_child(_mesh_cyl(0.058, flame_h[i],
+					flame_pos[i] + Vector3(0, flame_h[i] / 2.0, 0), _mat(fc, 2.8)))
 
 		Config.TrapType.ELECTRIC_NET:
 			var em = _mat(col, 3.5)
@@ -500,58 +496,41 @@ func _make_trap_icon(trap_type: int, col: Color) -> Node3D:
 				[Vector3(-0.01, 0.06, 0),  0.45, Vector2(0.22, 0.10)],
 			]
 			for seg in segs:
-				var b = CSGBox3D.new()
-				b.size = Vector3(seg[2].x, seg[2].y, 0.06)
-				b.position = seg[0]; b.rotation.z = seg[1]; b.material = em; icon.add_child(b)
+				var b = _mesh_box(Vector3(seg[2].x, seg[2].y, 0.06), seg[0], em)
+				b.rotation.z = seg[1]; icon.add_child(b)
 
 		Config.TrapType.GLUE:
 			var gm = _mat(col, 1.3)
-			var puddle = CSGCylinder3D.new()
-			puddle.radius = 0.28; puddle.height = 0.07
-			puddle.position = Vector3(0, 0.04, 0); puddle.material = gm; icon.add_child(puddle)
+			icon.add_child(_mesh_cyl(0.28, 0.07, Vector3(0, 0.04, 0), gm))
 			for bp in [Vector3(0, 0.17, 0), Vector3(0.13, 0.23, 0.09), Vector3(-0.11, 0.19, 0.11)]:
-				var blob = CSGSphere3D.new()
-				blob.radius = 0.085; blob.position = bp; blob.material = gm; icon.add_child(blob)
+				icon.add_child(_mesh_sphere(0.085, bp, gm))
 
 		Config.TrapType.POISON:
 			var bone_col = Color(0.86, 0.90, 0.78)
 			var skull_m  = _mat(bone_col, 0.6)
-			var head = CSGSphere3D.new()
-			head.radius = 0.21; head.position = Vector3(0, 0.29, 0); head.material = skull_m; icon.add_child(head)
+			icon.add_child(_mesh_sphere(0.21, Vector3(0, 0.29, 0), skull_m))
 			var dark = _mat(Color(0.0, 0.0, 0.0), 0.05)
 			for ep in [Vector3(-0.09, 0.31, 0.19), Vector3(0.09, 0.31, 0.19)]:
-				var eye = CSGSphere3D.new()
-				eye.radius = 0.065; eye.position = ep; eye.material = dark; icon.add_child(eye)
-			var nose = CSGBox3D.new()
-			nose.size = Vector3(0.06, 0.05, 0.04); nose.position = Vector3(0, 0.21, 0.20)
-			nose.material = dark; icon.add_child(nose)
+				icon.add_child(_mesh_sphere(0.065, ep, dark))
+			icon.add_child(_mesh_box(Vector3(0.06, 0.05, 0.04), Vector3(0, 0.21, 0.20), dark))
 			for rz in [PI / 4.0, -PI / 4.0]:
-				var bone = CSGCylinder3D.new()
-				bone.radius = 0.036; bone.height = 0.40
-				bone.position = Vector3(0, 0.06, 0); bone.rotation.z = rz; bone.material = skull_m; icon.add_child(bone)
+				var bone = _mesh_cyl(0.036, 0.40, Vector3(0, 0.06, 0), skull_m)
+				bone.rotation.z = rz; icon.add_child(bone)
 
 		Config.TrapType.BLIND:
-			var eye_body = CSGSphere3D.new()
-			eye_body.radius = 0.20; eye_body.position = Vector3(0, 0.22, 0)
-			eye_body.material = _mat(Color(0.96, 0.95, 0.92), 0.7); icon.add_child(eye_body)
-			var iris = CSGSphere3D.new()
-			iris.radius = 0.11; iris.position = Vector3(0, 0.22, 0.16)
-			iris.material = _mat(Color(0.1, 0.15, 0.85), 1.0); icon.add_child(iris)
-			var pupil = CSGSphere3D.new()
-			pupil.radius = 0.06; pupil.position = Vector3(0, 0.22, 0.21)
-			pupil.material = _mat(Color(0, 0, 0), 0.05); icon.add_child(pupil)
+			icon.add_child(_mesh_sphere(0.20, Vector3(0, 0.22, 0), _mat(Color(0.96, 0.95, 0.92), 0.7)))
+			icon.add_child(_mesh_sphere(0.11, Vector3(0, 0.22, 0.16), _mat(Color(0.1, 0.15, 0.85), 1.0)))
+			icon.add_child(_mesh_sphere(0.06, Vector3(0, 0.22, 0.21), _mat(Color(0, 0, 0), 0.05)))
 			var slash_m = _mat(Color(1.0, 0.1, 0.1), 2.5)
 			for rz in [PI / 4.0, -PI / 4.0]:
-				var sl = CSGBox3D.new()
-				sl.size = Vector3(0.40, 0.045, 0.045)
-				sl.position = Vector3(0, 0.22, 0.22); sl.rotation.z = rz; sl.material = slash_m; icon.add_child(sl)
+				var sl = _mesh_box(Vector3(0.40, 0.045, 0.045), Vector3(0, 0.22, 0.22), slash_m)
+				sl.rotation.z = rz; icon.add_child(sl)
 
 		Config.TrapType.CAGE:
 			var bar_m = _mat(Color(0.60, 0.62, 0.68), 0.55); bar_m.metallic = 0.75; bar_m.roughness = 0.25
 			for bp in [Vector3( 0.16, 0.25,  0.16), Vector3(-0.16, 0.25,  0.16),
 			           Vector3( 0.16, 0.25, -0.16), Vector3(-0.16, 0.25, -0.16)]:
-				var bar = CSGCylinder3D.new()
-				bar.radius = 0.032; bar.height = 0.50; bar.position = bp; bar.material = bar_m; icon.add_child(bar)
+				icon.add_child(_mesh_cyl(0.032, 0.50, bp, bar_m))
 			for ry in [0.0, 0.50]:
 				var ring = MeshInstance3D.new()
 				var torus = TorusMesh.new(); torus.inner_radius = 0.12; torus.outer_radius = 0.22
@@ -560,36 +539,27 @@ func _make_trap_icon(trap_type: int, col: Color) -> Node3D:
 
 		Config.TrapType.LURE:
 			var box_m = _mat(col, 1.1)
-			var box = CSGBox3D.new()
-			box.size = Vector3(0.32, 0.26, 0.32); box.position = Vector3(0, 0.13, 0); box.material = box_m; icon.add_child(box)
+			icon.add_child(_mesh_box(Vector3(0.32, 0.26, 0.32), Vector3(0, 0.13, 0), box_m))
 			var rib_m = _mat(col.lightened(0.45), 1.6)
 			for rv in [Vector3(0.32, 0.04, 0.09), Vector3(0.09, 0.04, 0.32)]:
-				var rib = CSGBox3D.new()
-				rib.size = rv; rib.position = Vector3(0, 0.28, 0); rib.material = rib_m; icon.add_child(rib)
+				icon.add_child(_mesh_box(rv, Vector3(0, 0.28, 0), rib_m))
 			for bp in [Vector3(-0.09, 0.37, 0), Vector3(0.09, 0.37, 0)]:
-				var bow = CSGSphere3D.new()
-				bow.radius = 0.09; bow.position = bp; bow.material = rib_m; icon.add_child(bow)
+				icon.add_child(_mesh_sphere(0.09, bp, rib_m))
 
 		Config.TrapType.TURRET:
 			var tm = _mat(col, 1.0); tm.metallic = 0.72; tm.roughness = 0.28
-			var base = CSGCylinder3D.new()
-			base.radius = 0.20; base.height = 0.07; base.position = Vector3(0, 0.04, 0); base.material = tm; icon.add_child(base)
-			var body = CSGBox3D.new()
-			body.size = Vector3(0.25, 0.24, 0.25); body.position = Vector3(0, 0.20, 0); body.material = tm; icon.add_child(body)
-			var barrel = CSGCylinder3D.new()
-			barrel.radius = 0.055; barrel.height = 0.44
-			barrel.position = Vector3(0, 0.28, 0.30); barrel.rotation.x = PI / 2.0; barrel.material = tm; icon.add_child(barrel)
-			var muzzle = CSGSphere3D.new()
-			muzzle.radius = 0.07; muzzle.position = Vector3(0, 0.28, 0.54)
-			muzzle.material = _mat(col.lightened(0.6), 4.0); icon.add_child(muzzle)
+			icon.add_child(_mesh_cyl(0.20, 0.07, Vector3(0, 0.04, 0), tm))
+			icon.add_child(_mesh_box(Vector3(0.25, 0.24, 0.25), Vector3(0, 0.20, 0), tm))
+			var barrel2 = _mesh_cyl(0.055, 0.44, Vector3(0, 0.28, 0.30), tm)
+			barrel2.rotation.x = PI / 2.0; icon.add_child(barrel2)
+			icon.add_child(_mesh_sphere(0.07, Vector3(0, 0.28, 0.54), _mat(col.lightened(0.6), 4.0)))
 
 		Config.TrapType.MIRROR:
 			var face_m = StandardMaterial3D.new()
 			face_m.albedo_color = col.lightened(0.35); face_m.metallic = 0.98; face_m.roughness = 0.02
 			face_m.emission_enabled = true; face_m.emission = col; face_m.emission_energy_multiplier = 0.7
-			var face = CSGCylinder3D.new()
-			face.radius = 0.22; face.height = 0.03
-			face.position = Vector3(0, 0.30, 0); face.rotation.x = PI / 2.0; face.material = face_m; icon.add_child(face)
+			var face = _mesh_cyl(0.22, 0.03, Vector3(0, 0.30, 0), face_m)
+			face.rotation.x = PI / 2.0; icon.add_child(face)
 			var frame_m = StandardMaterial3D.new()
 			frame_m.albedo_color = Color(0.85, 0.72, 0.25); frame_m.metallic = 0.92; frame_m.roughness = 0.08
 			frame_m.emission_enabled = true; frame_m.emission = Color(0.55, 0.42, 0.05); frame_m.emission_energy_multiplier = 0.8
@@ -597,9 +567,7 @@ func _make_trap_icon(trap_type: int, col: Color) -> Node3D:
 			var ftorus = TorusMesh.new(); ftorus.inner_radius = 0.20; ftorus.outer_radius = 0.30
 			frame.mesh = ftorus; frame.position = Vector3(0, 0.30, 0); frame.rotation.x = PI / 2.0
 			frame.set_surface_override_material(0, frame_m); icon.add_child(frame)
-			var handle = CSGCylinder3D.new()
-			handle.radius = 0.040; handle.height = 0.22
-			handle.position = Vector3(0, 0.11, 0); handle.material = frame_m; icon.add_child(handle)
+			icon.add_child(_mesh_cyl(0.040, 0.22, Vector3(0, 0.11, 0), frame_m))
 
 	return icon
 
