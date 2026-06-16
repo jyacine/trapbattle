@@ -24,6 +24,15 @@ var _pending_yaw_delta: float = 0.0
 # Higher = snappier/more responsive look, lower = smoother but laggier.
 # ~25 drains a spike over ~3-4 physics frames while staying responsive.
 const LOOK_SMOOTH_RATE := 25.0
+# Touch only: hard cap on how fast the view may turn (rad/s). A finger swipe can
+# buffer a large yaw delta and a mobile-web frame hitch can otherwise dump it all
+# in one physics step, snapping the view mid-turn — which feels chaotic when also
+# moving. Bounding the per-frame turn keeps it smooth. Generous enough that normal
+# swipes are unaffected. Desktop mouse is left uncapped (its deltas are tiny).
+const TOUCH_MAX_LOOK_RATE := 9.0
+# Largest buffered look delta we keep; anything beyond ~half a turn is a spurious
+# burst and is discarded so it can't accumulate into a runaway spin.
+const MAX_PENDING_YAW := PI
 
 # ── Camera ───────────────────────────────────────────────────────────────────
 var camera_node: Camera3D
@@ -133,8 +142,10 @@ func _physics_process(delta: float) -> void:
 	# frame and carry the rest, so a single large (coalesced) touch drag near a
 	# wall decays over a few frames instead of snapping the view in one step.
 	# Frame-rate aware so the feel is the same at any FPS.
-	var look_blend := 1.0 - exp(-LOOK_SMOOTH_RATE * delta)
-	var look_step  := _pending_yaw_delta * look_blend
+	# Discard absurdly large buffered deltas (spurious touch bursts) so they can't
+	# accumulate into a runaway spin, then apply a bounded, frame-hitch-safe step.
+	_pending_yaw_delta = clampf(_pending_yaw_delta, -MAX_PENDING_YAW, MAX_PENDING_YAW)
+	var look_step := compute_look_step(_pending_yaw_delta, delta, _is_touch)
 	yaw += look_step
 	_pending_yaw_delta -= look_step
 	if absf(_pending_yaw_delta) < 0.0001:
@@ -208,6 +219,19 @@ func _physics_process(delta: float) -> void:
 
 	if multiplayer.has_multiplayer_peer():
 		_net_pos.rpc(position, yaw)
+
+# Pure look-smoothing math (static so it can be unit-tested headless without a
+# full Player node — see tests/test_look_smoothing.gd). Returns how much to add
+# to `yaw` this frame given the buffered delta, the frame time, and whether the
+# input came from touch.
+static func compute_look_step(pending: float, delta: float, is_touch: bool) -> float:
+	var p  := clampf(pending, -MAX_PENDING_YAW, MAX_PENDING_YAW)
+	var dt := minf(delta, 1.0 / 30.0)          # ignore frame hitches when blending
+	var step := p * (1.0 - exp(-LOOK_SMOOTH_RATE * dt))
+	if is_touch:
+		# Bound the per-frame turn so a buffered swipe can never snap the view.
+		step = clampf(step, -TOUCH_MAX_LOOK_RATE * dt, TOUCH_MAX_LOOK_RATE * dt)
+	return step
 
 # ────────────────────────────────────────────────────────────────────────────
 func _input(event: InputEvent) -> void:
