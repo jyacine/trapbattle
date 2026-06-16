@@ -1,4 +1,4 @@
-extends CharacterBody3D
+﻿extends CharacterBody3D
 
 class_name Player
 
@@ -32,7 +32,7 @@ var camera_node: Camera3D
 var trap_inventory: Array = [-1, -1, -1]
 var active_trap_slot: int = 0
 var held_trap: int:                   # read alias used by UI / place code
-    get: return trap_inventory[active_trap_slot]
+	get: return trap_inventory[active_trap_slot]
 var _pickup_cooldown: float = 0.0
 
 # ── Gun ───────────────────────────────────────────────────────────────────────
