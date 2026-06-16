@@ -53,7 +53,7 @@ const PLAYER_LIVES  = 3
 const ROBOT_LIVES   = 3
 
 # ── Trap boxes ──────────────────────────────────────────────────────────────
-const NUM_TRAP_BOXES     = 6
+const NUM_TRAP_BOXES     = 12
 const BOX_MOVE_INTERVAL  = 4.0   # seconds between box moves
 
 # ── Trap types enum ─────────────────────────────────────────────────────────
