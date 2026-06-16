@@ -28,8 +28,11 @@ const LOOK_SMOOTH_RATE := 25.0
 # ── Camera ───────────────────────────────────────────────────────────────────
 var camera_node: Camera3D
 
-# ── Trap inventory ────────────────────────────────────────────────────────────
-var held_trap: int = -1
+# ── Trap inventory (3 slots) ──────────────────────────────────────────────────
+var trap_inventory: Array = [-1, -1, -1]
+var active_trap_slot: int = 0
+var held_trap: int:                   # read alias used by UI / place code
+    get: return trap_inventory[active_trap_slot]
 var _pickup_cooldown: float = 0.0
 
 # ── Gun ───────────────────────────────────────────────────────────────────────
@@ -216,11 +219,14 @@ func _input(event: InputEvent) -> void:
 	# would let joystick drags also turn the camera and make movement go haywire.
 	if not _is_touch:
 		if event is InputEventMouseButton and event.pressed:
-			if event.button_index == MOUSE_BUTTON_LEFT:
-				if Input.mouse_mode == Input.MOUSE_MODE_CAPTURED: _fire_gun()
-				else: Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
-			else:
-				Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+			match event.button_index:
+				MOUSE_BUTTON_LEFT:
+					if Input.mouse_mode == Input.MOUSE_MODE_CAPTURED: _fire_gun()
+					else: Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+				MOUSE_BUTTON_WHEEL_UP:   _cycle_slot(-1)
+				MOUSE_BUTTON_WHEEL_DOWN: _cycle_slot(1)
+				_:
+					Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 
 		if event is InputEventMouseMotion and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
 			_pending_yaw_delta -= event.relative.x * mouse_sensitivity
@@ -232,12 +238,19 @@ func _input(event: InputEvent) -> void:
 		match event.keycode:
 			KEY_SPACE:  _try_place()
 			KEY_TAB:    _fire_gun()
+			KEY_1:      active_trap_slot = 0
+			KEY_2:      active_trap_slot = 1
+			KEY_3:      active_trap_slot = 2
 			KEY_ESCAPE:
 				if OS.has_feature("web"): Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 				else: get_tree().quit()
 			KEY_R: get_tree().reload_current_scene()
 			KEY_F3:
 				if _dbg_label: _dbg_label.visible = not _dbg_label.visible
+
+# ── Slot cycling ─────────────────────────────────────────────────────────────
+func _cycle_slot(dir: int) -> void:
+	active_trap_slot = (active_trap_slot + dir + 3) % 3
 
 # ── Gun ───────────────────────────────────────────────────────────────────────
 func _fire_gun() -> void:
@@ -278,7 +291,8 @@ func _spawn_bullet_local(pos: Vector3, dir: Vector3) -> void:
 
 # ── Trap placement ────────────────────────────────────────────────────────────
 func _try_place() -> void:
-	if held_trap < 0 or trap_manager == null:
+	var trap_type := trap_inventory[active_trap_slot]
+	if trap_type < 0 or trap_manager == null:
 		return
 	var forward    = Vector3(-sin(yaw), 0.0, -cos(yaw))
 	var throw_pos  = position + forward * Config.CELL_SIZE
@@ -286,21 +300,32 @@ func _try_place() -> void:
 	var target_cell = throw_cell if game_manager.is_floor(throw_cell[0], throw_cell[1]) \
 	                             else current_grid_pos
 	if multiplayer.has_multiplayer_peer():
-		trap_manager.net_place_trap.rpc(target_cell, peer_id, held_trap)
+		trap_manager.net_place_trap.rpc(target_cell, peer_id, trap_type)
 	else:
-		trap_manager.place_trap(target_cell, peer_id, held_trap)
-	held_trap = -1
+		trap_manager.place_trap(target_cell, peer_id, trap_type)
+	trap_inventory[active_trap_slot] = -1
+	# Auto-advance to next occupied slot so the next throw is ready
+	for i in 3:
+		var s := (active_trap_slot + i + 1) % 3
+		if trap_inventory[s] >= 0:
+			active_trap_slot = s; break
 
 # ── Auto pick-up ─────────────────────────────────────────────────────────────
 func _try_pickup() -> void:
-	if held_trap >= 0 or _pickup_cooldown > 0.0 or trap_manager == null:
+	if _pickup_cooldown > 0.0 or trap_manager == null:
 		return
+	# Find first empty slot — if all 3 are full, don't pick up
+	var slot := -1
+	for i in 3:
+		if trap_inventory[i] < 0: slot = i; break
+	if slot < 0: return
 	var best_box = null; var best_dist = Config.CELL_SIZE * 0.75
 	for box in get_tree().get_nodes_in_group("trap_boxes"):
 		var d = position.distance_to(box.position)
 		if d < best_dist: best_dist = d; best_box = box
 	if best_box != null:
-		held_trap = best_box.trap_type; best_box.respawn_box()
+		trap_inventory[slot] = best_box.trap_type
+		best_box.respawn_box()
 		_pickup_cooldown = 0.5
 		if sound_manager: sound_manager.play_pickup()
 

@@ -46,6 +46,10 @@ var _notif_vbox: VBoxContainer
 # ── Blind flash ───────────────────────────────────────────────────────────────
 var _blind_overlay: ColorRect
 
+# ── Trap inventory bar (bottom centre) ───────────────────────────────────────
+var _inv_bar:   Control = null
+var _inv_slots: Array   = []   # Array of {panel, sb_normal, sb_active, label}
+
 # ── Mobile controls (phone / web) ─────────────────────────────────────────────
 const _JOY_BASE := 170.0  # joystick ring diameter
 const _JOY_KNOB := 70.0   # joystick knob diameter
@@ -102,6 +106,7 @@ func _ready() -> void:
 	_build_overlay()
 	_build_blind_overlay()
 	_build_mobile_buttons()
+	_build_inventory_bar()
 	_build_notifications()
 
 	if player != null:
@@ -129,6 +134,7 @@ func _process(_delta: float) -> void:
 	# Keep the joystick knob parked at the ring centre while idle (also handles resize).
 	if _joy_base_nd != null and _joy_id == -1:
 		_recenter_knob()
+	_update_inventory_bar()
 	if not game_manager.is_playing:
 		_show_overlay()
 
@@ -667,6 +673,101 @@ func _action_image_button(size: float, tex_path: String) -> Panel:
 	tr.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	p.add_child(tr)
 	return p
+
+# ── Inventory bar (bottom centre, always visible) ────────────────────────────
+func _build_inventory_bar() -> void:
+	if player == null: return
+
+	const SZ    := 72.0   # slot size
+	const GAP   := 8.0    # gap between slots
+	const MG    := 30.0   # bottom margin (above hint label)
+	const TOTAL := SZ * 3 + GAP * 2   # 232 px
+
+	_inv_bar = Control.new()
+	_inv_bar.anchor_left   = 0.5; _inv_bar.anchor_right  = 0.5
+	_inv_bar.anchor_top    = 1.0; _inv_bar.anchor_bottom = 1.0
+	_inv_bar.offset_left   = -TOTAL * 0.5
+	_inv_bar.offset_right  =  TOTAL * 0.5
+	_inv_bar.offset_top    = -(SZ + MG)
+	_inv_bar.offset_bottom = -MG
+	add_child(_inv_bar)
+
+	_inv_slots.clear()
+	for i in 3:
+		var btn = Button.new()
+		btn.position = Vector2(i * (SZ + GAP), 0)
+		btn.size     = Vector2(SZ, SZ)
+		btn.flat     = true
+
+		var sb = StyleBoxFlat.new()
+		sb.bg_color = Color(0.05, 0.05, 0.10, 0.80)
+		sb.border_color = Color(0.4, 0.4, 0.4, 0.80)
+		sb.set_border_width_all(2)
+		sb.set_corner_radius_all(6)
+		btn.add_theme_stylebox_override("normal",  sb)
+		btn.add_theme_stylebox_override("hover",   sb)
+		btn.add_theme_stylebox_override("pressed", sb)
+		btn.add_theme_stylebox_override("focus",   StyleBoxEmpty.new())
+
+		var num_lbl = Label.new()
+		num_lbl.text = str(i + 1)
+		num_lbl.add_theme_font_size_override("font_size", 10)
+		num_lbl.add_theme_color_override("font_color", Color(0.55, 0.55, 0.55))
+		num_lbl.position = Vector2(4, 2)
+		num_lbl.size     = Vector2(20, 16)
+		num_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		btn.add_child(num_lbl)
+
+		var lbl = Label.new()
+		lbl.text = "-"
+		lbl.add_theme_font_size_override("font_size", 11)
+		lbl.add_theme_color_override("font_color", Color.GRAY)
+		lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		lbl.vertical_alignment   = VERTICAL_ALIGNMENT_CENTER
+		lbl.set_anchors_preset(Control.PRESET_FULL_RECT)
+		lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		btn.add_child(lbl)
+
+		var slot_idx := i
+		btn.pressed.connect(func(): player.active_trap_slot = slot_idx)
+
+		_inv_bar.add_child(btn)
+		_inv_slots.append({ "sb": sb, "lbl": lbl })
+
+func _update_inventory_bar() -> void:
+	if _inv_bar == null or player == null: return
+
+	for i in 3:
+		var slot   = _inv_slots[i]
+		var sb: StyleBoxFlat = slot["sb"]
+		var lbl: Label       = slot["lbl"]
+		var trap_type: int   = player.trap_inventory[i]
+		var is_active: bool  = (i == player.active_trap_slot)
+
+		if trap_type >= 0:
+			var col: Color = Config.TRAP_COLORS[trap_type]
+			lbl.text = Config.TRAP_NAMES[trap_type]
+			if is_active:
+				lbl.add_theme_color_override("font_color", col.lightened(0.25))
+				sb.border_color = Color(1.0, 0.95, 0.25, 1.0)
+				sb.set_border_width_all(3)
+				sb.bg_color = Color(col.r * 0.28, col.g * 0.28, col.b * 0.28, 0.92)
+			else:
+				lbl.add_theme_color_override("font_color", col.darkened(0.25))
+				sb.border_color = Color(0.45, 0.45, 0.45, 0.80)
+				sb.set_border_width_all(2)
+				sb.bg_color = Color(0.05, 0.05, 0.10, 0.80)
+		else:
+			lbl.text = "-"
+			lbl.add_theme_color_override("font_color", Color(0.38, 0.38, 0.38))
+			if is_active:
+				sb.border_color = Color(0.65, 0.65, 0.65, 0.90)
+				sb.set_border_width_all(3)
+				sb.bg_color = Color(0.10, 0.10, 0.15, 0.85)
+			else:
+				sb.border_color = Color(0.32, 0.32, 0.32, 0.70)
+				sb.set_border_width_all(2)
+				sb.bg_color = Color(0.05, 0.05, 0.10, 0.80)
 
 func _circle_panel(size: float, fill: Color, border: Color, bw: int) -> Panel:
 	var p = Panel.new()
