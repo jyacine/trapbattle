@@ -600,7 +600,7 @@ func _build_mobile_buttons() -> void:
 	add_child(_joy_knob_nd)
 
 	# FIRE button — large orange-red circle, bottom-right corner
-	_fire_nd = _action_circle(FSZ, Color(0.88, 0.22, 0.06, 0.88), "🔫\nFIRE")
+	_fire_nd = _action_icon_circle(FSZ, Color(0.88, 0.22, 0.06, 0.88), "gun")
 	_fire_nd.anchor_left   = 1.0; _fire_nd.anchor_right  = 1.0
 	_fire_nd.anchor_top    = 1.0; _fire_nd.anchor_bottom = 1.0
 	_fire_nd.offset_left   = -(FSZ + MG); _fire_nd.offset_right  = -MG
@@ -608,7 +608,7 @@ func _build_mobile_buttons() -> void:
 	add_child(_fire_nd)
 
 	# TRAP button — blue circle, left of fire, vertically centred with it
-	_trap_nd = _action_circle(TSZ, Color(0.22, 0.44, 0.90, 0.85), "💣\nTRAP")
+	_trap_nd = _action_icon_circle(TSZ, Color(0.22, 0.44, 0.90, 0.85), "bomb")
 	var trap_off_x := FSZ + TSZ + MG * 2 + 8
 	var trap_off_y := MG + (FSZ - TSZ) * 0.5
 	_trap_nd.anchor_left   = 1.0; _trap_nd.anchor_right  = 1.0
@@ -644,22 +644,44 @@ func _build_mobile_buttons() -> void:
 			)
 			vm.voice_button = btn_voice
 
-# Filled circle panel with a centred label child.
-func _action_circle(size: float, col: Color, label_txt: String) -> Panel:
+# Filled circle panel with a vector icon drawn on top (no font/emoji dependency,
+# so the icons render identically on every device — phones often lack an emoji
+# font and showed the old 🔫 / 💣 glyphs as empty boxes).
+func _action_icon_circle(size: float, col: Color, icon_kind: String) -> Panel:
 	var p = _circle_panel(size, col, col.lightened(0.30), 3)
-	var lbl = Label.new()
-	lbl.text = label_txt
-	lbl.add_theme_font_size_override("font_size", 14)
-	lbl.add_theme_color_override("font_color", Color.WHITE)
-	lbl.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.7))
-	lbl.add_theme_constant_override("shadow_offset_x", 1)
-	lbl.add_theme_constant_override("shadow_offset_y", 1)
-	lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	lbl.vertical_alignment   = VERTICAL_ALIGNMENT_CENTER
-	lbl.set_anchors_preset(Control.PRESET_FULL_RECT)
-	lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	p.add_child(lbl)
+	var icon = Control.new()
+	icon.custom_minimum_size = Vector2(size, size)
+	icon.set_anchors_preset(Control.PRESET_FULL_RECT)
+	icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	icon.draw.connect(_draw_action_icon.bind(icon, icon_kind))
+	p.add_child(icon)
 	return p
+
+# Draws a simple gun or bomb glyph filling `ctrl`. Coordinates are normalised to
+# the control's size so the same icon scales to any button diameter.
+func _draw_action_icon(ctrl: Control, kind: String) -> void:
+	var w: float = ctrl.size.x
+	var h: float = ctrl.size.y
+	if w <= 0.0 or h <= 0.0: return
+	var white := Color(1, 1, 1, 0.96)
+	if kind == "gun":
+		# Slide / barrel (points right), front sight, trigger guard, angled grip.
+		ctrl.draw_rect(Rect2(w * 0.16, h * 0.40, w * 0.70, h * 0.14), white)
+		ctrl.draw_rect(Rect2(w * 0.80, h * 0.35, w * 0.06, h * 0.06), white)
+		ctrl.draw_rect(Rect2(w * 0.42, h * 0.54, w * 0.05, h * 0.12), white)
+		ctrl.draw_colored_polygon(PackedVector2Array([
+			Vector2(w * 0.28, h * 0.54),
+			Vector2(w * 0.46, h * 0.54),
+			Vector2(w * 0.40, h * 0.80),
+			Vector2(w * 0.22, h * 0.80),
+		]), white)
+	elif kind == "bomb":
+		# Round body, fuse cap, curved fuse, lit spark.
+		ctrl.draw_circle(Vector2(w * 0.50, h * 0.60), w * 0.25, white)
+		ctrl.draw_rect(Rect2(w * 0.44, h * 0.29, w * 0.12, h * 0.09), white)
+		ctrl.draw_line(Vector2(w * 0.50, h * 0.30), Vector2(w * 0.66, h * 0.16),
+			white, maxf(2.0, w * 0.035))
+		ctrl.draw_circle(Vector2(w * 0.68, h * 0.13), w * 0.07, Color(1.0, 0.72, 0.12, 0.98))
 
 func _circle_panel(size: float, fill: Color, border: Color, bw: int) -> Panel:
 	var p = Panel.new()
