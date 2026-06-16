@@ -615,11 +615,13 @@ func _build_mobile_buttons() -> void:
 	_trap_nd.offset_top    = -(FSZ * 0.5 + MG + TSZ); _trap_nd.offset_bottom = -(FSZ * 0.5 + MG)
 	add_child(_trap_nd)
 
-	# Voice button (multiplayer only) — above trap button
+	# Voice button (multiplayer only) — above trap button, same right edge
 	if multiplayer.has_multiplayer_peer():
 		var vm = get_parent().get_node_or_null("VoiceManager") as VoiceManager
 		if vm:
 			const VSZ := 68.0
+			# Trap top = -(FSZ*0.5 + MG + TSZ); voice sits MG above that
+			var v_bot := -(FSZ * 0.5 + MG + TSZ + 12)
 			var btn_voice = Button.new()
 			btn_voice.text = "🎤\nON"
 			btn_voice.add_theme_font_size_override("font_size", 14)
@@ -631,10 +633,11 @@ func _build_mobile_buttons() -> void:
 			btn_voice.add_theme_stylebox_override("normal", vsb)
 			btn_voice.add_theme_stylebox_override("pressed", vsb)
 			btn_voice.anchor_left   = 1.0; btn_voice.anchor_right  = 1.0
-			btn_voice.anchor_top    = 1.0; btn_voice.anchor_bottom = 1.0
-			btn_voice.offset_left   = -trap_off_x - VSZ; btn_voice.offset_right  = -trap_off_x
-			var vy_bot := trap_off_y + TSZ + 12
-			btn_voice.offset_top    = -(VSZ + vy_bot); btn_voice.offset_bottom = -vy_bot
+			btn_voice.anchor_top    = 0.5; btn_voice.anchor_bottom = 0.5
+			btn_voice.offset_right  = -MG
+			btn_voice.offset_left   = -(VSZ + MG)
+			btn_voice.offset_top    = v_bot - VSZ
+			btn_voice.offset_bottom = v_bot
 			add_child(btn_voice)
 			btn_voice.pressed.connect(func():
 				if vm._transmitting: vm.mute()
