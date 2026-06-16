@@ -111,6 +111,7 @@ func _build_menu() -> void:
 	_ip_field.anchor_top  = 0.5;  _ip_field.anchor_bottom = 0.5
 	_ip_field.offset_left = -210; _ip_field.offset_right  = 210
 	_ip_field.offset_top  = -10;  _ip_field.offset_bottom = 34
+	_make_field_mobile_friendly(_ip_field)
 	add_child(_ip_field)
 	_menu_nodes.append(_ip_field)
 
@@ -126,6 +127,13 @@ func _build_menu() -> void:
 	_name_field.anchor_top  = 0.5;  _name_field.anchor_bottom = 0.5
 	_name_field.offset_left = -210; _name_field.offset_right  = 210
 	_name_field.offset_top  = 46;   _name_field.offset_bottom = 90
+	_make_field_mobile_friendly(_name_field)
+	# On the first tap the default name is auto-selected, so the player can simply
+	# start typing to replace it instead of having to clear it character by character
+	# (which is awkward on a phone keyboard).
+	_name_field.focus_entered.connect(func():
+		if _name_field.text == _default_name:
+			_name_field.select_all())
 	add_child(_name_field)
 	_menu_nodes.append(_name_field)
 
@@ -382,6 +390,22 @@ func _on_lobby_ready(seed_val: int) -> void:
 	queue_free()
 
 # ── Helper ────────────────────────────────────────────────────────────────────
+# Make a LineEdit usable on a phone: tall enough to tap reliably, the OS virtual
+# keyboard explicitly enabled, and a clear (✕) button so the field can be wiped
+# with one tap. Without the taller hit-box the field is hard to focus on mobile,
+# which is why the name could not be edited on a phone.
+func _make_field_mobile_friendly(field: LineEdit) -> void:
+	field.custom_minimum_size = Vector2(0, 52)
+	field.virtual_keyboard_enabled = true
+	field.virtual_keyboard_type    = LineEdit.KEYBOARD_TYPE_DEFAULT
+	field.clear_button_enabled     = true
+	field.context_menu_enabled     = true
+	field.selecting_enabled        = true
+	field.editable                 = true
+	# A taller field needs a wider tap target; grow the box downward so it does not
+	# collide with the control below it.
+	field.offset_bottom = field.offset_top + 52
+
 func _mk_btn(txt: String, col: Color) -> Button:
 	var btn = Button.new()
 	btn.text = txt
