@@ -46,6 +46,10 @@ var _notif_vbox: VBoxContainer
 # ── Blind flash ───────────────────────────────────────────────────────────────
 var _blind_overlay: ColorRect
 
+# ── Trap inventory bar (bottom centre) ───────────────────────────────────────
+var _inv_bar:   Control = null
+var _inv_slots: Array   = []   # Array of {panel, sb_normal, sb_active, label}
+
 # ── Mobile controls (phone / web) ─────────────────────────────────────────────
 const _JOY_BASE := 170.0  # joystick ring diameter
 const _JOY_KNOB := 70.0   # joystick knob diameter
@@ -102,6 +106,7 @@ func _ready() -> void:
 	_build_overlay()
 	_build_blind_overlay()
 	_build_mobile_buttons()
+	_build_inventory_bar()
 	_build_notifications()
 
 	if player != null:
@@ -129,6 +134,7 @@ func _process(_delta: float) -> void:
 	# Keep the joystick knob parked at the ring centre while idle (also handles resize).
 	if _joy_base_nd != null and _joy_id == -1:
 		_recenter_knob()
+	_update_inventory_bar()
 	if not game_manager.is_playing:
 		_show_overlay()
 
@@ -151,7 +157,7 @@ func _build_hud() -> void:
 	var is_mp     = multiplayer.has_multiplayer_peer()
 	var voice_hint = "  V=Mute/Unmute" if is_mp else ""
 	_hint_label = _make_label(
-		"W/S=Move  Q/E=Turn  Walk over box=Pick up  SPACE=Throw Trap  LMB=Fire  R=Restart" + voice_hint,
+		"W/S=Move  ←/→=Strafe  Q/E=Turn  Walk over box=Pick up  SPACE=Trap  LMB=Fire  R=Restart" + voice_hint,
 		0, 0, 13, Color(0.8, 0.8, 0.8)
 	)
 	_hint_label.anchor_left   = 0.0; _hint_label.anchor_right = 1.0
@@ -437,9 +443,13 @@ func _update_hud() -> void:
 	if player.held_trap >= 0:
 		_trap_label.text = "Trap: [%s]  (SPACE to throw)" % Config.TRAP_NAMES[player.held_trap]
 		_trap_label.add_theme_color_override("font_color", Config.TRAP_COLORS[player.held_trap])
+		if _trap_nd != null:
+			_trap_nd.modulate = Config.TRAP_COLORS[player.held_trap]
 	else:
 		_trap_label.text = "No trap  (walk over a glowing box to pick one up)"
 		_trap_label.add_theme_color_override("font_color", Color.GRAY)
+		if _trap_nd != null:
+			_trap_nd.modulate = Color(1, 1, 1, 0.40)
 
 	if player._gun_cooldown > 0.0:
 		_gun_label.text = "Gun: %.1fs" % player._gun_cooldown
@@ -581,7 +591,7 @@ func _build_blind_overlay() -> void:
 # ── Mobile controls (phone / web) ────────────────────────────────────────────
 func _build_mobile_buttons() -> void:
 	if player == null: return
-	if not (_is_mobile_device() or OS.has_feature("web")): return
+	if not _is_mobile_device(): return
 
 	const FSZ := 120.0   # fire button diameter
 	const TSZ :=  90.0   # trap button diameter
@@ -599,29 +609,30 @@ func _build_mobile_buttons() -> void:
 	_joy_knob_nd = _circle_panel(_JOY_KNOB, Color(0.72, 0.74, 0.80, 0.72), Color(1.0, 1.0, 1.0, 0.88), 2)
 	add_child(_joy_knob_nd)
 
-	# FIRE button — large orange-red circle, bottom-right corner
-	_fire_nd = _action_circle(FSZ, Color(0.88, 0.22, 0.06, 0.88), "🔫\nFIRE")
-	_fire_nd.anchor_left   = 1.0; _fire_nd.anchor_right  = 1.0
-	_fire_nd.anchor_top    = 1.0; _fire_nd.anchor_bottom = 1.0
-	_fire_nd.offset_left   = -(FSZ + MG); _fire_nd.offset_right  = -MG
-	_fire_nd.offset_top    = -(FSZ + MG); _fire_nd.offset_bottom = -MG
+	# FIRE button — gun icon, centred at 30% from left
+	_fire_nd = _action_image_button(FSZ, "res://assets/icons/icon_gun.svg")
+	_fire_nd.anchor_left   = 0.75; _fire_nd.anchor_right  = 0.75
+	_fire_nd.anchor_top    = 0.72; _fire_nd.anchor_bottom = 0.72
+	_fire_nd.offset_left   = -FSZ * 0.5; _fire_nd.offset_right  = FSZ * 0.5
+	_fire_nd.offset_top    = -FSZ * 0.5; _fire_nd.offset_bottom = FSZ * 0.5
 	add_child(_fire_nd)
 
-	# TRAP button — blue circle, left of fire, vertically centred with it
-	_trap_nd = _action_circle(TSZ, Color(0.22, 0.44, 0.90, 0.85), "💣\nTRAP")
-	var trap_off_x := FSZ + TSZ + MG * 2 + 8
-	var trap_off_y := MG + (FSZ - TSZ) * 0.5
+	# TRAP button — bomb icon, above fire button, same right edge
+	_trap_nd = _action_image_button(TSZ, "res://assets/icons/icon_bomb.svg")
 	_trap_nd.anchor_left   = 1.0; _trap_nd.anchor_right  = 1.0
-	_trap_nd.anchor_top    = 1.0; _trap_nd.anchor_bottom = 1.0
-	_trap_nd.offset_left   = -trap_off_x - TSZ; _trap_nd.offset_right  = -trap_off_x
-	_trap_nd.offset_top    = -(TSZ + trap_off_y); _trap_nd.offset_bottom = -trap_off_y
+	_trap_nd.anchor_top    = 0.72; _trap_nd.anchor_bottom = 0.72
+	_trap_nd.offset_left   = -(TSZ + MG); _trap_nd.offset_right  = -MG
+	_trap_nd.offset_top    = -(FSZ * 0.5 + MG + TSZ); _trap_nd.offset_bottom = -(FSZ * 0.5 + MG)
 	add_child(_trap_nd)
 
-	# Voice button (multiplayer only) — above trap button
+	# Voice button (multiplayer only) — above trap button, same right edge
 	if multiplayer.has_multiplayer_peer():
 		var vm = get_parent().get_node_or_null("VoiceManager") as VoiceManager
 		if vm:
 			const VSZ := 68.0
+			# Trap top = -(FSZ*0.5 + MG + TSZ); voice sits 12px above that
+			var v_bot := -(FSZ * 0.5 + MG + TSZ + 12)
+			# (anchor_top = 0.72 matches fire/trap buttons)
 			var btn_voice = Button.new()
 			btn_voice.text = "🎤\nON"
 			btn_voice.add_theme_font_size_override("font_size", 14)
@@ -633,10 +644,11 @@ func _build_mobile_buttons() -> void:
 			btn_voice.add_theme_stylebox_override("normal", vsb)
 			btn_voice.add_theme_stylebox_override("pressed", vsb)
 			btn_voice.anchor_left   = 1.0; btn_voice.anchor_right  = 1.0
-			btn_voice.anchor_top    = 1.0; btn_voice.anchor_bottom = 1.0
-			btn_voice.offset_left   = -trap_off_x - VSZ; btn_voice.offset_right  = -trap_off_x
-			var vy_bot := trap_off_y + TSZ + 12
-			btn_voice.offset_top    = -(VSZ + vy_bot); btn_voice.offset_bottom = -vy_bot
+			btn_voice.anchor_top    = 0.72; btn_voice.anchor_bottom = 0.72
+			btn_voice.offset_right  = -MG
+			btn_voice.offset_left   = -(VSZ + MG)
+			btn_voice.offset_top    = v_bot - VSZ
+			btn_voice.offset_bottom = v_bot
 			add_child(btn_voice)
 			btn_voice.pressed.connect(func():
 				if vm._transmitting: vm.mute()
@@ -644,22 +656,118 @@ func _build_mobile_buttons() -> void:
 			)
 			vm.voice_button = btn_voice
 
-# Filled circle panel with a centred label child.
-func _action_circle(size: float, col: Color, label_txt: String) -> Panel:
-	var p = _circle_panel(size, col, col.lightened(0.30), 3)
-	var lbl = Label.new()
-	lbl.text = label_txt
-	lbl.add_theme_font_size_override("font_size", 14)
-	lbl.add_theme_color_override("font_color", Color.WHITE)
-	lbl.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.7))
-	lbl.add_theme_constant_override("shadow_offset_x", 1)
-	lbl.add_theme_constant_override("shadow_offset_y", 1)
-	lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	lbl.vertical_alignment   = VERTICAL_ALIGNMENT_CENTER
-	lbl.set_anchors_preset(Control.PRESET_FULL_RECT)
-	lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	p.add_child(lbl)
+# Transparent hit-area panel with a SVG image button. No background — icon
+# floats directly on the HUD like a standard game action button.
+func _action_image_button(size: float, tex_path: String) -> Panel:
+	var p = Panel.new()
+	p.custom_minimum_size = Vector2(size, size)
+	var sb = StyleBoxFlat.new()
+	sb.bg_color = Color(0, 0, 0, 0)
+	p.add_theme_stylebox_override("panel", sb)
+	p.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var tr = TextureRect.new()
+	tr.texture = load(tex_path)
+	tr.expand_mode = TextureRect.EXPAND_FIT_WIDTH_PROPORTIONAL
+	tr.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	tr.set_anchors_preset(Control.PRESET_FULL_RECT)
+	tr.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	p.add_child(tr)
 	return p
+
+# ── Inventory bar (bottom centre, always visible) ────────────────────────────
+func _build_inventory_bar() -> void:
+	if player == null: return
+
+	const SZ    := 72.0   # slot size
+	const GAP   := 8.0    # gap between slots
+	const MG    := 30.0   # bottom margin (above hint label)
+	const TOTAL := SZ * 3 + GAP * 2   # 232 px
+
+	_inv_bar = Control.new()
+	_inv_bar.anchor_left   = 0.5; _inv_bar.anchor_right  = 0.5
+	_inv_bar.anchor_top    = 1.0; _inv_bar.anchor_bottom = 1.0
+	_inv_bar.offset_left   = -TOTAL * 0.5
+	_inv_bar.offset_right  =  TOTAL * 0.5
+	_inv_bar.offset_top    = -(SZ + MG)
+	_inv_bar.offset_bottom = -MG
+	add_child(_inv_bar)
+
+	_inv_slots.clear()
+	for i in 3:
+		var btn = Button.new()
+		btn.position = Vector2(i * (SZ + GAP), 0)
+		btn.size     = Vector2(SZ, SZ)
+		btn.flat     = true
+
+		var sb = StyleBoxFlat.new()
+		sb.bg_color = Color(0.05, 0.05, 0.10, 0.80)
+		sb.border_color = Color(0.4, 0.4, 0.4, 0.80)
+		sb.set_border_width_all(2)
+		sb.set_corner_radius_all(6)
+		btn.add_theme_stylebox_override("normal",  sb)
+		btn.add_theme_stylebox_override("hover",   sb)
+		btn.add_theme_stylebox_override("pressed", sb)
+		btn.add_theme_stylebox_override("focus",   StyleBoxEmpty.new())
+
+		var num_lbl = Label.new()
+		num_lbl.text = str(i + 1)
+		num_lbl.add_theme_font_size_override("font_size", 10)
+		num_lbl.add_theme_color_override("font_color", Color(0.55, 0.55, 0.55))
+		num_lbl.position = Vector2(4, 2)
+		num_lbl.size     = Vector2(20, 16)
+		num_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		btn.add_child(num_lbl)
+
+		var lbl = Label.new()
+		lbl.text = "-"
+		lbl.add_theme_font_size_override("font_size", 11)
+		lbl.add_theme_color_override("font_color", Color.GRAY)
+		lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		lbl.vertical_alignment   = VERTICAL_ALIGNMENT_CENTER
+		lbl.set_anchors_preset(Control.PRESET_FULL_RECT)
+		lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		btn.add_child(lbl)
+
+		var slot_idx := i
+		btn.pressed.connect(func(): player.active_trap_slot = slot_idx)
+
+		_inv_bar.add_child(btn)
+		_inv_slots.append({ "sb": sb, "lbl": lbl })
+
+func _update_inventory_bar() -> void:
+	if _inv_bar == null or player == null: return
+
+	for i in 3:
+		var slot   = _inv_slots[i]
+		var sb: StyleBoxFlat = slot["sb"]
+		var lbl: Label       = slot["lbl"]
+		var trap_type: int   = player.trap_inventory[i]
+		var is_active: bool  = (i == player.active_trap_slot)
+
+		if trap_type >= 0:
+			var col: Color = Config.TRAP_COLORS[trap_type]
+			lbl.text = Config.TRAP_NAMES[trap_type]
+			if is_active:
+				lbl.add_theme_color_override("font_color", col.lightened(0.25))
+				sb.border_color = Color(1.0, 0.95, 0.25, 1.0)
+				sb.set_border_width_all(3)
+				sb.bg_color = Color(col.r * 0.28, col.g * 0.28, col.b * 0.28, 0.92)
+			else:
+				lbl.add_theme_color_override("font_color", col.darkened(0.25))
+				sb.border_color = Color(0.45, 0.45, 0.45, 0.80)
+				sb.set_border_width_all(2)
+				sb.bg_color = Color(0.05, 0.05, 0.10, 0.80)
+		else:
+			lbl.text = "-"
+			lbl.add_theme_color_override("font_color", Color(0.38, 0.38, 0.38))
+			if is_active:
+				sb.border_color = Color(0.65, 0.65, 0.65, 0.90)
+				sb.set_border_width_all(3)
+				sb.bg_color = Color(0.10, 0.10, 0.15, 0.85)
+			else:
+				sb.border_color = Color(0.32, 0.32, 0.32, 0.70)
+				sb.set_border_width_all(2)
+				sb.bg_color = Color(0.05, 0.05, 0.10, 0.80)
 
 func _circle_panel(size: float, fill: Color, border: Color, bw: int) -> Panel:
 	var p = Panel.new()
@@ -751,7 +859,7 @@ func _input(event: InputEvent) -> void:
 			get_tree().quit()
 
 	# Touch controls
-	if not (_is_mobile_device() or OS.has_feature("web")): return
+	if not _is_mobile_device(): return
 	if player == null or not game_manager.is_playing: return
 
 	var vp_hw: float = get_viewport().get_visible_rect().size.x * 0.5
