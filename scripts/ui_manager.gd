@@ -599,11 +599,11 @@ func _build_mobile_buttons() -> void:
 	_joy_knob_nd = _circle_panel(_JOY_KNOB, Color(0.72, 0.74, 0.80, 0.72), Color(1.0, 1.0, 1.0, 0.88), 2)
 	add_child(_joy_knob_nd)
 
-	# FIRE button — gun icon, right side, ~72% down (PUBG-style)
+	# FIRE button — gun icon, shifted left from right edge
 	_fire_nd = _action_image_button(FSZ, "res://assets/icons/icon_gun.svg")
 	_fire_nd.anchor_left   = 1.0; _fire_nd.anchor_right  = 1.0
 	_fire_nd.anchor_top    = 0.72; _fire_nd.anchor_bottom = 0.72
-	_fire_nd.offset_left   = -(FSZ + MG); _fire_nd.offset_right  = -MG
+	_fire_nd.offset_left   = -(FSZ + MG + 55); _fire_nd.offset_right  = -(MG + 55)
 	_fire_nd.offset_top    = -FSZ * 0.5;  _fire_nd.offset_bottom = FSZ * 0.5
 	add_child(_fire_nd)
 
