@@ -291,7 +291,7 @@ func _spawn_bullet_local(pos: Vector3, dir: Vector3) -> void:
 
 # ── Trap placement ────────────────────────────────────────────────────────────
 func _try_place() -> void:
-	var trap_type := trap_inventory[active_trap_slot]
+	var trap_type: int = trap_inventory[active_trap_slot]
 	if trap_type < 0 or trap_manager == null:
 		return
 	var forward    = Vector3(-sin(yaw), 0.0, -cos(yaw))
