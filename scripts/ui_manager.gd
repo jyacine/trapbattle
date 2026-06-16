@@ -605,7 +605,7 @@ func _build_mobile_buttons() -> void:
 
 	# FIRE button — gun icon, centred at 30% from left
 	_fire_nd = _action_image_button(FSZ, "res://assets/icons/icon_gun.svg")
-	_fire_nd.anchor_left   = 0.30; _fire_nd.anchor_right  = 0.30
+	_fire_nd.anchor_left   = 0.75; _fire_nd.anchor_right  = 0.75
 	_fire_nd.anchor_top    = 0.72; _fire_nd.anchor_bottom = 0.72
 	_fire_nd.offset_left   = -FSZ * 0.5; _fire_nd.offset_right  = FSZ * 0.5
 	_fire_nd.offset_top    = -FSZ * 0.5; _fire_nd.offset_bottom = FSZ * 0.5
