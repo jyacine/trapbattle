@@ -36,6 +36,24 @@ const JITTER_TARGET  := 0.12    # keep ~this much buffered in the generator (jit
 const JITTER_PREBUF  := 0.12    # accumulate this much before (re)starting playout
 const JITTER_MAX     := 0.40    # cap queued audio; drop oldest beyond this (bounds latency)
 
+# ── WebRTC DataChannel transport (UDP — off the TCP/WebSocket plane) ──────────
+# When enabled, voice flows over an UNRELIABLE/UNORDERED WebRTC DataChannel to the
+# dedicated server (which relays it), instead of the reliable WebSocket RPC. That
+# removes TCP head-of-line blocking — the root cause of choppiness under loss.
+# Signaling (offer/answer/ICE) rides the existing reliable RPC channel.
+#
+# Topology: STAR (client <-> server), NOT a P2P mesh — same relay model as the WS
+# path, so no player IPs are exposed to each other and it scales linearly.
+#
+# DEFAULT OFF. Enable ONLY once the dedicated server is deployed with the
+# webrtc-native GDExtension (see trapbattle-server). Until the channel is OPEN,
+# voice automatically falls back to the WebSocket relay, so flipping this on without
+# a WebRTC-capable server simply keeps using WebSocket. The web client has WebRTC
+# built in (browser), so no client-side addon is needed.
+const USE_WEBRTC   := false
+const RTC_STUN     := "stun:stun.l.google.com:19302"
+const RTC_CH_ID    := 1          # negotiated DataChannel id — MUST match the server
+
 # ── IMA-ADPCM codec tables (standard) ────────────────────────────────────────
 # 4 bits/sample. Each relayed packet is self-contained: a 3-byte header carries
 # the encoder's predictor (int16 LE) + step index (u8) at the packet's start, then
@@ -80,6 +98,11 @@ var _jq_play: Dictionary = {}  # pid → bool (true = playing, false = (re)prebu
 # How long since we last received audio from each remote peer
 var _speaking_timers: Dictionary = {}  # pid → float countdown
 
+# WebRTC voice link (client → server). Null unless USE_WEBRTC and negotiation began.
+var _rtc:       WebRTCPeerConnection = null
+var _vch:       WebRTCDataChannel    = null
+var _rtc_open:  bool = false   # true once the DataChannel reaches STATE_OPEN
+
 # Optional on-screen button + its icon, set by UIManager. The icon swaps between
 # the mic (transmitting) and muted-speaker (muted) SVG textures.
 var voice_button: Button = null
@@ -93,6 +116,9 @@ func _ready() -> void:
 		return
 	_setup_mic()
 	# Mic is open (not muted) but stays silent on the network until VAD hears speech.
+	# Bring up the WebRTC voice link (clients only; the dedicated server answers).
+	if USE_WEBRTC and not multiplayer.is_server():
+		_setup_webrtc()
 
 func _setup_mic() -> void:
 	_capture_rate = AudioServer.get_mix_rate()
@@ -127,6 +153,15 @@ func _process(delta: float) -> void:
 		if _speaking_timers[pid] <= 0.0:
 			_speaking_timers.erase(pid)
 			player_speaking_changed.emit(pid, false)
+
+	# WebRTC: poll the connection and drain any incoming voice datagrams.
+	if _rtc != null:
+		_rtc.poll()
+		if _vch != null:
+			if not _rtc_open and _vch.get_ready_state() == WebRTCDataChannel.STATE_OPEN:
+				_rtc_open = true
+			while _vch.get_available_packet_count() > 0:
+				_on_voice_datagram(_vch.get_packet())
 
 	if _transmitting:
 		_send_timer -= delta
@@ -214,7 +249,11 @@ func _capture_and_send() -> void:
 	_enc_index     = enc["index"]
 
 	var my_id = multiplayer.get_unique_id()
-	if multiplayer.is_server():
+	# Prefer the WebRTC DataChannel (UDP) when it is open; the server identifies the
+	# sender by which channel the packet arrived on, so we send raw ADPCM here.
+	if _rtc_open and _vch != null and _vch.get_ready_state() == WebRTCDataChannel.STATE_OPEN:
+		_vch.put_packet(bytes)
+	elif multiplayer.is_server():
 		_rpc_play_voice.rpc(bytes, my_id)
 	else:
 		_rpc_voice.rpc_id(1, bytes, my_id)
@@ -364,6 +403,66 @@ func _rpc_play_voice(audio_bytes: PackedByteArray, sender_id: int) -> void:
 		player_speaking_changed.emit(sender_id, true)
 	_speaking_timers[sender_id] = SPEAKING_TIMEOUT
 	_push_to_speaker(sender_id, audio_bytes)
+
+# ── WebRTC voice link (client side) ───────────────────────────────────────────
+# Negotiate an unreliable/unordered DataChannel to the server. Signaling rides the
+# existing reliable RPC channel. The channel is "negotiated" (both sides create it
+# with the same id) so it needs no in-band SDP renegotiation.
+func _setup_webrtc() -> void:
+	_rtc = WebRTCPeerConnection.new()
+	if _rtc.initialize({ "iceServers": [ { "urls": [RTC_STUN] } ] }) != OK:
+		push_warning("[voice] WebRTC init failed — using WebSocket relay")
+		_rtc = null
+		return
+	_rtc.session_description_created.connect(_on_rtc_sdp)
+	_rtc.ice_candidate_created.connect(_on_rtc_ice)
+	_vch = _rtc.create_data_channel("voice",
+		{ "negotiated": true, "id": RTC_CH_ID, "ordered": false, "maxRetransmits": 0 })
+	if _vch != null:
+		_vch.write_mode = WebRTCDataChannel.WRITE_MODE_BINARY
+	_rtc.create_offer()
+
+func _on_rtc_sdp(type: String, sdp: String) -> void:
+	if _rtc == null: return
+	_rtc.set_local_description(type, sdp)
+	if type == "offer":
+		_rpc_voice_offer.rpc_id(1, sdp)
+
+func _on_rtc_ice(media: String, index: int, name: String) -> void:
+	_rpc_voice_ice.rpc_id(1, media, index, name)
+
+# Incoming server-relayed datagram: [sender_id int32 LE][ADPCM bytes...]
+func _on_voice_datagram(pkt: PackedByteArray) -> void:
+	if pkt.size() < 5: return
+	var sender_id := pkt.decode_s32(0)
+	if sender_id == multiplayer.get_unique_id(): return
+	var audio := pkt.slice(4)
+	if not _speaking_timers.has(sender_id):
+		player_speaking_changed.emit(sender_id, true)
+	_speaking_timers[sender_id] = SPEAKING_TIMEOUT
+	_push_to_speaker(sender_id, audio)
+
+# ── Signaling RPCs (ride the reliable channel) ────────────────────────────────
+# These must be declared with the IDENTICAL set + decorators on the server's voice
+# node (trapbattle-server/scripts/voice_relay.gd) — Godot indexes @rpc methods by
+# their position in the alphabetically-sorted list, so a mismatch misroutes calls.
+
+## Client → server: SDP offer for the voice DataChannel. Handled on the server.
+@rpc("any_peer", "call_remote", "reliable")
+func _rpc_voice_offer(_sdp: String) -> void:
+	pass   # server-only handler
+
+## Server → client: SDP answer.
+@rpc("authority", "call_remote", "reliable")
+func _rpc_voice_answer(sdp: String) -> void:
+	if _rtc != null:
+		_rtc.set_remote_description("answer", sdp)
+
+## Trickle ICE, both directions (any_peer so the server can send it back).
+@rpc("any_peer", "call_remote", "reliable")
+func _rpc_voice_ice(media: String, index: int, name: String) -> void:
+	if _rtc != null:
+		_rtc.add_ice_candidate(media, index, name)
 
 # ── Playback ──────────────────────────────────────────────────────────────────
 # Decode an incoming packet and QUEUE it (the jitter buffer). _pump_speakers feeds
