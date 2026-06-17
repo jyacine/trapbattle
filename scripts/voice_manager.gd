@@ -63,8 +63,12 @@ var _speaker_nodes: Dictionary = {}
 # How long since we last received audio from each remote peer
 var _speaking_timers: Dictionary = {}  # pid → float countdown
 
-# Optional on-screen button set by UIManager
+# Optional on-screen button + its icon, set by UIManager. The icon swaps between
+# the mic (transmitting) and muted-speaker (muted) SVG textures.
 var voice_button: Button = null
+var voice_button_icon: TextureRect = null
+const _MIC_TEX  := preload("res://assets/icons/icon_mic.svg")
+const _MUTE_TEX := preload("res://assets/icons/icon_mute.svg")
 
 # ─────────────────────────────────────────────────────────────────────────────
 func _ready() -> void:
@@ -141,11 +145,13 @@ func stop_transmitting()  -> void: mute()
 func _update_button() -> void:
 	if voice_button == null or not is_instance_valid(voice_button): return
 	if _transmitting:
-		voice_button.text     = "MIC\nON"
 		voice_button.modulate = Color(1, 1, 1)
+		if is_instance_valid(voice_button_icon):
+			voice_button_icon.texture = _MIC_TEX
 	else:
-		voice_button.text     = "MIC\nOFF"
 		voice_button.modulate = Color(1.0, 0.4, 0.4)
+		if is_instance_valid(voice_button_icon):
+			voice_button_icon.texture = _MUTE_TEX
 
 # ── Capture & send ────────────────────────────────────────────────────────────
 func _capture_and_send() -> void:
