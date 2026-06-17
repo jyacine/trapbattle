@@ -8,8 +8,9 @@ extends SceneTree
 #
 # Run:
 #   godot --headless --path <project> --script res://tests/test_look_smoothing.gd
-# Result is printed and also written to user://test_look_smoothing_result.txt
+# Result is printed and also written to C:/work/game/report/test_look_smoothing_result.txt
 # (stdout capture is unreliable in some shells). Exit code is 0 on pass, 1 on fail.
+const REPORT_PATH := "C:/work/game/report/test_look_smoothing_result.txt"
 
 var _lines: PackedStringArray = []
 var _failures := 0
@@ -55,7 +56,7 @@ func _init() -> void:
 	var report := "\n".join(_lines)
 	print(report)
 
-	var f := FileAccess.open("user://test_look_smoothing_result.txt", FileAccess.WRITE)
+	var f := FileAccess.open(REPORT_PATH, FileAccess.WRITE)
 	if f:
 		f.store_string(report + "\n")
 		f.close()
