@@ -8,8 +8,15 @@ var player: Player         # local / authoritative player
 var _opponents: Array = []
 var _net: NetworkManager
 
+# Heart icon for lives — the ♥ glyph isn't in the default font (renders as a
+# missing-glyph box on the web build), so lives are drawn as SVG textures instead.
+const HEART_TEX := preload("res://assets/icons/icon_heart.svg")
+const HEART_COLOR := Color(0.95, 0.35, 0.35)
+
 # ── HUD labels ────────────────────────────────────────────────────────────────
 var _kills_label:   Label
+var _lives_box:     HBoxContainer   # heart icons for the local player's lives
+var _wins_label:    Label
 var _trap_label:    Label
 var _gun_label:     Label
 var _hint_label:    Label
@@ -24,7 +31,7 @@ var _hp_label: Label
 # ── Player list panel (all players, right side) ───────────────────────────────
 var _player_hud_panel: PanelContainer
 var _player_hud_vbox:  VBoxContainer
-# pid → { hp_fill, voice_lbl, hp_lbl, kills_lbl, lives_lbl, row_root }
+# pid → { hp_fill, voice_lbl, hp_lbl, kills_lbl, lives_box, row_root }
 var _player_rows: Dictionary = {}
 var _speaking_pids: Dictionary = {}  # pid → bool
 
@@ -145,8 +152,23 @@ func _process(_delta: float) -> void:
 
 # ── HUD ───────────────────────────────────────────────────────────────────────
 func _build_hud() -> void:
-	_kills_label = _make_label("", 10, 10, 22, Color.YELLOW)
-	add_child(_kills_label)
+	# Top line: "Kills: N" + heart icons + "(first to M wins)" laid out in a row so
+	# the lives can be real heart textures (the ♥ glyph is missing from the font).
+	var top_line = HBoxContainer.new()
+	top_line.offset_left = 10; top_line.offset_top = 10
+	top_line.add_theme_constant_override("separation", 8)
+	add_child(top_line)
+
+	_kills_label = _make_label("", 0, 0, 22, Color.YELLOW)
+	top_line.add_child(_kills_label)
+
+	_lives_box = HBoxContainer.new()
+	_lives_box.add_theme_constant_override("separation", 3)
+	_lives_box.alignment = BoxContainer.ALIGNMENT_CENTER
+	top_line.add_child(_lives_box)
+
+	_wins_label = _make_label("", 0, 0, 22, Color.YELLOW)
+	top_line.add_child(_wins_label)
 
 	_trap_label = _make_label("", 10, 44, 18, Color.WHITE)
 	add_child(_trap_label)
@@ -270,7 +292,7 @@ func _ensure_player_row(pid: int) -> void:
 	top_h.add_child(dot)
 
 	var name_lbl = Label.new()
-	name_lbl.text = name_str + (" ★" if is_me else "")
+	name_lbl.text = name_str + ("  (you)" if is_me else "")
 	name_lbl.add_theme_font_size_override("font_size", 12)
 	name_lbl.add_theme_color_override("font_color",
 		Color(1.0, 0.95, 0.5) if is_me else Color(0.9, 0.9, 0.9))
@@ -278,9 +300,12 @@ func _ensure_player_row(pid: int) -> void:
 	name_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	top_h.add_child(name_lbl)
 
+	# Speaking indicator — the 🔊 emoji isn't in the default font, so use a small
+	# "((•))" sound-wave glyph made of characters the font actually has.
 	var voice_lbl = Label.new()
-	voice_lbl.text = "🔊"
-	voice_lbl.add_theme_font_size_override("font_size", 12)
+	voice_lbl.text = "((•))"
+	voice_lbl.add_theme_font_size_override("font_size", 11)
+	voice_lbl.add_theme_color_override("font_color", Color(0.45, 1.0, 0.55))
 	voice_lbl.visible = false
 	top_h.add_child(voice_lbl)
 
@@ -313,8 +338,9 @@ func _ensure_player_row(pid: int) -> void:
 	hp_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	bot_h.add_child(hp_lbl)
 
-	var lives_lbl = _make_label("♥♥♥", 0, 0, 10, Color(0.95, 0.35, 0.35))
-	bot_h.add_child(lives_lbl)
+	var lives_box = HBoxContainer.new()
+	lives_box.add_theme_constant_override("separation", 2)
+	bot_h.add_child(lives_box)
 
 	var kills_lbl = _make_label("K:0", 0, 0, 10, Color(0.55, 0.85, 1.0))
 	bot_h.add_child(kills_lbl)
@@ -323,7 +349,7 @@ func _ensure_player_row(pid: int) -> void:
 		"hp_fill":   hp_fill,
 		"voice_lbl": voice_lbl,
 		"hp_lbl":    hp_lbl,
-		"lives_lbl": lives_lbl,
+		"lives_box": lives_box,
 		"kills_lbl": kills_lbl,
 		"base_col":  col,
 	}
@@ -357,9 +383,9 @@ func _update_player_hud() -> void:
 
 		# Lives hearts
 		var lives: int = game_manager.lives.get(pid, Config.PLAYER_LIVES)
-		var lives_lbl: Label = row["lives_lbl"]
-		if is_instance_valid(lives_lbl):
-			lives_lbl.text = "♥".repeat(max(lives, 0))
+		var lives_box: HBoxContainer = row["lives_box"]
+		if is_instance_valid(lives_box):
+			_set_hearts(lives_box, max(lives, 0), 11.0)
 
 		# Kills
 		var kills: int = game_manager.kills.get(pid, 0)
@@ -431,9 +457,9 @@ func _update_hud() -> void:
 	var my_k    = game_manager.kills.get(pid, 0)
 	var my_l    = game_manager.lives.get(pid, Config.PLAYER_LIVES)
 
-	_kills_label.text = "Kills: %d  Lives: %s  (first to %d wins)" % [
-		my_k, "♥ ".repeat(my_l).strip_edges(), Config.KILLS_TO_WIN
-	]
+	_kills_label.text = "Kills: %d   Lives:" % my_k
+	_set_hearts(_lives_box, my_l, 20.0)
+	_wins_label.text  = "(first to %d wins)" % Config.KILLS_TO_WIN
 
 	# HP bar
 	var ratio = float(my_hp) / float(Config.MAX_HP)
@@ -472,7 +498,7 @@ func _update_hud() -> void:
 
 	if _net != null and not multiplayer.is_server():
 		var ms = _net.ping_ms
-		_ping_label.text = "● %d ms" % ms
+		_ping_label.text = "• %d ms" % ms
 		var col: Color
 		if ms < 50:        col = Color(0.2, 1.0, 0.2)
 		elif ms < 150:     col = Color(1.0, 0.85, 0.1)
@@ -537,7 +563,7 @@ func _mm_dot(gx: int, gy: int, col: Color, radius: int) -> void:
 # ── Exit / leave-match ─────────────────────────────────────────────────────────
 func _build_exit_button() -> void:
 	_exit_btn = Button.new()
-	_exit_btn.text = "✕ Exit"
+	_exit_btn.text = "X Exit"
 	_exit_btn.add_theme_font_size_override("font_size", 16)
 	_exit_btn.add_theme_color_override("font_color", Color.WHITE)
 	var sb = StyleBoxFlat.new()
@@ -751,7 +777,7 @@ func _build_mobile_buttons() -> void:
 			var v_bot := -(FSZ * 0.5 + MG + TSZ + 12)
 			# (anchor_top matches fire/trap buttons — ACT_ANCHOR)
 			var btn_voice = Button.new()
-			btn_voice.text = "🎤\nON"
+			btn_voice.text = "MIC\nON"
 			btn_voice.add_theme_font_size_override("font_size", 14)
 			btn_voice.add_theme_color_override("font_color", Color.WHITE)
 			var vsb = StyleBoxFlat.new()
@@ -790,6 +816,27 @@ func _action_image_button(size: float, tex_path: String) -> Panel:
 	tr.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	p.add_child(tr)
 	return p
+
+# Build/refresh a row of heart icons to match `count`. Lives are drawn as SVG
+# textures because the ♥ glyph is absent from the default font (it renders as a
+# missing-glyph box on the web build). Only rebuilds when the count changes.
+func _set_hearts(box: HBoxContainer, count: int, px: float) -> void:
+	if box == null: return
+	var cur: int = int(box.get_meta("hearts", -1))
+	if cur == count: return
+	box.set_meta("hearts", count)
+	for c in box.get_children():
+		box.remove_child(c)
+		c.queue_free()
+	for i in count:
+		var tr = TextureRect.new()
+		tr.texture = HEART_TEX
+		tr.custom_minimum_size = Vector2(px, px)
+		tr.expand_mode  = TextureRect.EXPAND_IGNORE_SIZE
+		tr.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		tr.modulate     = HEART_COLOR
+		tr.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		box.add_child(tr)
 
 # ── Inventory bar (bottom centre, always visible) ────────────────────────────
 func _build_inventory_bar() -> void:
