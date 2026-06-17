@@ -34,6 +34,7 @@ var _player_hud_vbox:  VBoxContainer
 # pid → { hp_fill, voice_lbl, hp_lbl, kills_lbl, lives_box, row_root }
 var _player_rows: Dictionary = {}
 var _speaking_pids: Dictionary = {}  # pid → bool
+var _voice_btn:     Button = null    # mic mute/unmute toggle (multiplayer only)
 
 # ── Minimap ───────────────────────────────────────────────────────────────────
 var _mm_rect:    TextureRect
@@ -119,6 +120,7 @@ func _ready() -> void:
 	_build_mobile_buttons()
 	_build_exit_button()
 	_build_inventory_bar()
+	_build_voice_button()
 	_build_notifications()
 
 	if player != null:
@@ -400,6 +402,10 @@ func _update_player_hud() -> void:
 
 func _on_player_speaking_changed(pid: int, speaking: bool) -> void:
 	_speaking_pids[pid] = speaking
+	# Brighten the local player's mic button while transmitting — an always-visible
+	# speaking indicator (the scoreboard ((•)) marker covers remote peers).
+	if player != null and pid == player.peer_id and is_instance_valid(_voice_btn):
+		_voice_btn.modulate = Color(1.4, 1.4, 1.4) if speaking else Color(1, 1, 1)
 
 # ── Crosshair ─────────────────────────────────────────────────────────────────
 func _build_crosshair() -> void:
@@ -768,36 +774,39 @@ func _build_mobile_buttons() -> void:
 	_trap_nd.offset_top    = -(FSZ * 0.5 + MG + TSZ); _trap_nd.offset_bottom = -(FSZ * 0.5 + MG)
 	add_child(_trap_nd)
 
-	# Voice button (multiplayer only) — above trap button, same right edge
-	if multiplayer.has_multiplayer_peer():
-		var vm = get_parent().get_node_or_null("VoiceManager") as VoiceManager
-		if vm:
-			const VSZ := 68.0
-			# Trap top = -(FSZ*0.5 + MG + TSZ); voice sits 12px above that
-			var v_bot := -(FSZ * 0.5 + MG + TSZ + 12)
-			# (anchor_top matches fire/trap buttons — ACT_ANCHOR)
-			var btn_voice = Button.new()
-			btn_voice.text = "MIC\nON"
-			btn_voice.add_theme_font_size_override("font_size", 14)
-			btn_voice.add_theme_color_override("font_color", Color.WHITE)
-			var vsb = StyleBoxFlat.new()
-			vsb.bg_color = Color(0.20, 0.68, 0.36, 0.85)
-			vsb.border_color = Color(0.55, 1.0, 0.65, 0.90)
-			vsb.set_border_width_all(2); vsb.set_corner_radius_all(int(VSZ * 0.5))
-			btn_voice.add_theme_stylebox_override("normal", vsb)
-			btn_voice.add_theme_stylebox_override("pressed", vsb)
-			btn_voice.anchor_left   = 1.0; btn_voice.anchor_right  = 1.0
-			btn_voice.anchor_top    = ACT_ANCHOR; btn_voice.anchor_bottom = ACT_ANCHOR
-			btn_voice.offset_right  = -MG
-			btn_voice.offset_left   = -(VSZ + MG)
-			btn_voice.offset_top    = v_bot - VSZ
-			btn_voice.offset_bottom = v_bot
-			add_child(btn_voice)
-			btn_voice.pressed.connect(func():
-				if vm._transmitting: vm.mute()
-				else:                vm.unmute()
-			)
-			vm.voice_button = btn_voice
+# Mic mute/unmute toggle. Built for every multiplayer client (desktop + mobile
+# web), not just touch — on desktop you can also press V. Placed on the mid-left
+# edge so it never overlaps the top-right scoreboard or the bottom-right action
+# cluster. The button brightens while you are actually transmitting (VAD), so it
+# doubles as your own speaking indicator.
+func _build_voice_button() -> void:
+	if not multiplayer.has_multiplayer_peer(): return
+	var vm = get_parent().get_node_or_null("VoiceManager") as VoiceManager
+	if vm == null: return
+
+	const VSZ := 60.0
+	const VMG := 14.0
+	_voice_btn = Button.new()
+	_voice_btn.text = "MIC\nON"
+	_voice_btn.add_theme_font_size_override("font_size", 13)
+	_voice_btn.add_theme_color_override("font_color", Color.WHITE)
+	var vsb = StyleBoxFlat.new()
+	vsb.bg_color     = Color(0.20, 0.68, 0.36, 0.85)
+	vsb.border_color = Color(0.55, 1.0, 0.65, 0.90)
+	vsb.set_border_width_all(2); vsb.set_corner_radius_all(int(VSZ * 0.5))
+	_voice_btn.add_theme_stylebox_override("normal",  vsb)
+	_voice_btn.add_theme_stylebox_override("hover",   vsb)
+	_voice_btn.add_theme_stylebox_override("pressed", vsb.duplicate())
+	# Mid-left edge, vertically centred a little above middle.
+	_voice_btn.anchor_left  = 0.0; _voice_btn.anchor_right  = 0.0
+	_voice_btn.anchor_top   = 0.42; _voice_btn.anchor_bottom = 0.42
+	_voice_btn.offset_left  = VMG;        _voice_btn.offset_right  = VMG + VSZ
+	_voice_btn.offset_top   = -VSZ * 0.5; _voice_btn.offset_bottom = VSZ * 0.5
+	add_child(_voice_btn)
+	_voice_btn.pressed.connect(func():
+		if vm._transmitting: vm.mute()
+		else:                vm.unmute())
+	vm.voice_button = _voice_btn
 
 # Transparent hit-area panel with a SVG image button. No background — icon
 # floats directly on the HUD like a standard game action button.
