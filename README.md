@@ -3,6 +3,9 @@
 A 3D multiplayer maze trap-combat game built with **Godot 4.6.3**.  
 Set traps, kill the robot, survive. Play online at <https://jyacine.itch.io/battletrap>.
 
+> **Architecture:** see [architecture.md](architecture.md) for the full system
+> design (client + dedicated server, networking planes, voice pipeline/transport).
+
 ---
 
 ## Project structure
@@ -29,7 +32,7 @@ trapbattle/
     ├── trap_box.gd        # Individual trap node
     ├── sound_manager.gd   # SFX playback
     ├── ui_manager.gd      # HUD, voice icon, mute button
-    └── voice_manager.gd   # Mic capture, VAD, PCM relay, playback
+    └── voice_manager.gd   # Mic capture, VAD, ADPCM, jitter-buffered playback, relay
 ```
 
 ---
@@ -94,6 +97,12 @@ The default lobby host is `172-174-208-254.nip.io` (the live Azure VM). Change i
 
 - Press **V** or the on-screen button to toggle mute (mic is open by default).
 - Voice Activity Detection (VAD) gates transmission — silence is never sent.
-- Audio is downsampled to 11 025 Hz / 8-bit before relay, keeping bandwidth low.
+- Audio is anti-alias downsampled to **16 kHz wideband** and **IMA-ADPCM** (4-bit,
+  ~64 kbps while speaking) before relay through the server.
+- The mic bus is muted locally, so you never hear yourself. A per-speaker **jitter
+  buffer** smooths bursty arrival on playback.
+- **Transport:** WebSocket relay by default; an optional **WebRTC DataChannel** path
+  (UDP, off the TCP plane) exists behind `const USE_WEBRTC` — see
+  [architecture.md §6](architecture.md#6-voice-transport-two-options).
 - Requires `audio/driver/enable_input=true` in `project.godot` (already set).
 - Inside the itch.io iframe, mic access requires the `allow="microphone"` attribute. Use the fullscreen button if the browser blocks the prompt.
