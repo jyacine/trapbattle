@@ -1115,10 +1115,16 @@ func _input(event: InputEvent) -> void:
 			# Higher gain so a short finger swipe turns a useful amount (was 1.8 —
 			# turning felt sluggish; 3.2 was a touch too twitchy, so 2.6).
 			var sens: float = player.mouse_sensitivity * 2.6
-			# Clamp a single (possibly browser-coalesced) drag delta so a frame
-			# hitch near a wall can't deliver one huge lump that snaps the view.
-			var dx := clampf(drag.relative.x, -60.0, 60.0)
-			var dy := clampf(drag.relative.y, -60.0, 60.0)
+			# Compute the delta from position ourselves instead of trusting
+			# drag.relative: Godot inflates `relative` (~2x with two touches —
+			# godotengine/godot#94346, #33470) whenever a second finger is down.
+			# Moving (joystick) + turning (this drag) means TWO fingers, so relative
+			# comes back doubled and snaps the view — the chaotic turn-while-moving.
+			# Tracking our own previous position sidesteps the bug entirely. The
+			# clamp still guards against a coalesced lump after a frame hitch.
+			var dx := clampf(drag.position.x - _look_prev.x, -60.0, 60.0)
+			var dy := clampf(drag.position.y - _look_prev.y, -60.0, 60.0)
+			_look_prev = drag.position
 			player._pending_yaw_delta -= dx * sens
 			player.pitch = clamp(player.pitch - dy * sens, -PI / 3.0, PI / 3.0)
 			if player.camera_node:
