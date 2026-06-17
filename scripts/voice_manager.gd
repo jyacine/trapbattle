@@ -2,24 +2,45 @@ extends Node
 class_name VoiceManager
 
 # ── Voice chat over WebSocket relay ──────────────────────────────────────────
-# Architecture:
+# Architecture (server-relayed, like mainstream games / SFU middleware — NOT a
+# P2P mesh, which would leak every player's IP and scale O(N²)):
 #   1. Mic is open by default (always-on).  Press V or the on-screen button
 #      to MUTE / UNMUTE (toggle).
 #   2. Voice-activity detection (VAD): audio is only sent while you are actually
 #      speaking — silence is never transmitted, which slashes server relay load.
-#   3. Captured PCM is resampled to VOICE_RATE and quantised to 8-bit before it
-#      is relayed through the server to all other peers (¼ the bandwidth of the
-#      raw 44.1 kHz capture).
+#   3. Captured PCM is resampled to VOICE_RATE and compressed with 4-bit IMA-ADPCM
+#      before it is relayed through the server to all other peers. ADPCM halves the
+#      bytes of the old 8-bit PCM, and the lower rate trims more — together ~60 %
+#      less relay traffic, still clearly intelligible.  The server forwards the
+#      bytes opaquely (no decode), so this is a pure client-side optimisation.
 #   4. player_speaking_changed fires so the UI can show / hide the 🔊 icon.
 
 signal player_speaking_changed(pid: int, is_speaking: bool)
 
-const VOICE_RATE      := 11025   # send/playback rate — plenty for intelligible voice
+const VOICE_RATE      := 8000    # send/playback rate — telephone quality, intelligible
 const SEND_INTERVAL   := 0.06    # seconds between audio packets
 const SPEAKING_TIMEOUT := 0.30   # silence after last packet → "stopped speaking"
 const VAD_THRESHOLD   := 0.010   # mic RMS above this counts as speech (favor transmitting)
 const VAD_HANGOVER    := 0.40    # keep transmitting this long after speech dips
 const MIC_BUS         := "VoiceMic"
+
+# ── IMA-ADPCM codec tables (standard) ────────────────────────────────────────
+# 4 bits/sample. Each relayed packet is self-contained: a 3-byte header carries
+# the encoder's predictor (int16 LE) + step index (u8) at the packet's start, then
+# the 4-bit codes (two per byte). Self-contained headers make packets robust to the
+# loss/reorder of the unreliable voice RPC.
+const _ADPCM_INDEX_TABLE: Array[int] = [-1, -1, -1, -1, 2, 4, 6, 8]
+const _ADPCM_STEP_TABLE: Array[int] = [
+	7, 8, 9, 10, 11, 12, 13, 14, 16, 17,
+	19, 21, 23, 25, 28, 31, 34, 37, 41, 45,
+	50, 55, 60, 66, 73, 80, 88, 97, 107, 118,
+	130, 143, 157, 173, 190, 209, 230, 253, 279, 307,
+	337, 371, 408, 449, 494, 544, 598, 658, 724, 796,
+	876, 963, 1060, 1166, 1282, 1411, 1552, 1707, 1878, 2066,
+	2272, 2499, 2749, 3024, 3327, 3660, 4026, 4428, 4871, 5358,
+	5894, 6484, 7132, 7845, 8630, 9493, 10442, 11487, 12635, 13899,
+	15289, 16818, 18500, 20350, 22385, 24623, 27086, 29794, 32767,
+]
 
 # ── Internal state ────────────────────────────────────────────────────────────
 var _transmitting:  bool  = true  # true = mic open (not muted)
@@ -29,6 +50,11 @@ var _mic_capture:   AudioEffectCapture
 var _capture_rate:  float = 44100.0  # actual AudioServer mix rate (mic capture rate)
 var _vad_hangover:  float = 0.0      # >0 while still transmitting the speech tail
 var _local_speaking: bool = false    # current VAD state for the local mic
+
+# ADPCM encoder state, carried across packets for continuity (each packet still
+# writes the current predictor/index into its header so the decoder stays in sync).
+var _enc_predictor: int = 0
+var _enc_index:     int = 0
 
 # peer_id → AudioStreamGeneratorPlayback  (remote voices)
 var _speakers:      Dictionary = {}
@@ -102,7 +128,10 @@ func mute() -> void:
 
 func unmute() -> void:
 	_transmitting = true
-	# Stays silent on the network until VAD detects speech again.
+	# Start the ADPCM stream fresh so the first packet after un-muting doesn't carry
+	# a stale predictor from before. Stays silent on the network until VAD fires.
+	_enc_predictor = 0
+	_enc_index     = 0
 	_update_button()
 
 # Kept for backward compat (UIManager button wired these up before)
@@ -146,9 +175,13 @@ func _capture_and_send() -> void:
 	if not speaking:
 		return   # silence — transmit nothing
 
-	# Resample capture_rate → VOICE_RATE and quantise to 8-bit unsigned.
-	var bytes := _resample_quantize(frames, _capture_rate, float(VOICE_RATE))
-	if bytes.is_empty(): return
+	# Resample capture_rate → VOICE_RATE, then 4-bit IMA-ADPCM compress.
+	var samples := _resample(frames, _capture_rate, float(VOICE_RATE))
+	if samples.is_empty(): return
+	var enc := adpcm_encode(samples, _enc_predictor, _enc_index)
+	var bytes: PackedByteArray = enc["bytes"]
+	_enc_predictor = enc["predictor"]
+	_enc_index     = enc["index"]
 
 	var my_id = multiplayer.get_unique_id()
 	if multiplayer.is_server():
@@ -156,18 +189,18 @@ func _capture_and_send() -> void:
 	else:
 		_rpc_voice.rpc_id(1, bytes, my_id)
 
-# Linear-resample mono samples (frames[i].x) from src_rate to dst_rate and pack
-# each as one unsigned byte. Robust to 44100 or 48000 Hz capture devices.
-func _resample_quantize(frames: PackedVector2Array, src_rate: float, dst_rate: float) -> PackedByteArray:
+# Linear-resample mono samples (frames[i].x) from src_rate to dst_rate, returning
+# float samples in [-1, 1]. Robust to 44100 or 48000 Hz capture devices.
+func _resample(frames: PackedVector2Array, src_rate: float, dst_rate: float) -> PackedFloat32Array:
 	var n_in := frames.size()
 	if n_in == 0 or src_rate <= 0.0:
-		return PackedByteArray()
+		return PackedFloat32Array()
 	var ratio := dst_rate / src_rate
 	var n_out := int(n_in * ratio)
 	if n_out <= 0:
-		return PackedByteArray()
-	var bytes := PackedByteArray()
-	bytes.resize(n_out)
+		return PackedFloat32Array()
+	var out := PackedFloat32Array()
+	out.resize(n_out)
 	for j in n_out:
 		var src_pos := float(j) / ratio
 		var i0 := int(src_pos)
@@ -175,9 +208,91 @@ func _resample_quantize(frames: PackedVector2Array, src_rate: float, dst_rate: f
 		var frac := src_pos - float(i0)
 		var f0: Vector2 = frames[i0]
 		var f1: Vector2 = frames[i1]
-		var s: float = f0.x + (f1.x - f0.x) * frac
-		bytes[j] = int(clampf(s, -1.0, 1.0) * 127.0) + 128
-	return bytes
+		out[j] = f0.x + (f1.x - f0.x) * frac
+	return out
+
+# ── IMA-ADPCM codec (static + pure → unit-testable headless) ──────────────────
+# Encode float samples [-1,1] into a self-contained packet: 3-byte header
+# (predictor int16 LE, step index u8) + 4-bit codes (two per byte). `predictor`
+# and `index` seed the encoder (pass the carried state); the returned dict gives
+# the bytes plus the updated state for the next packet.
+static func adpcm_encode(samples: PackedFloat32Array, predictor: int, index: int) -> Dictionary:
+	var bytes := PackedByteArray()
+	var pred := clampi(predictor, -32768, 32767)
+	var idx  := clampi(index, 0, 88)
+	# Header
+	bytes.append(pred & 0xFF)
+	bytes.append((pred >> 8) & 0xFF)
+	bytes.append(idx)
+
+	var buffered := false
+	var cache := 0
+	for k in samples.size():
+		var sample := int(clampf(samples[k], -1.0, 1.0) * 32767.0)
+		var step: int = _ADPCM_STEP_TABLE[idx]
+		var diff := sample - pred
+		var code := 0
+		if diff < 0:
+			code = 8
+			diff = -diff
+		var tmp := step
+		if diff >= tmp:
+			code |= 4; diff -= tmp
+		tmp >>= 1
+		if diff >= tmp:
+			code |= 2; diff -= tmp
+		tmp >>= 1
+		if diff >= tmp:
+			code |= 1
+		# Reconstruct predictor exactly as the decoder will.
+		var diffq := step >> 3
+		if code & 4: diffq += step
+		if code & 2: diffq += step >> 1
+		if code & 1: diffq += step >> 2
+		if code & 8: pred -= diffq
+		else:        pred += diffq
+		pred = clampi(pred, -32768, 32767)
+		idx  = clampi(idx + _ADPCM_INDEX_TABLE[code & 7], 0, 88)
+		# Pack two 4-bit codes per byte (low nibble first).
+		if not buffered:
+			cache = code & 0x0F
+			buffered = true
+		else:
+			bytes.append((cache & 0x0F) | ((code & 0x0F) << 4))
+			buffered = false
+	if buffered:
+		bytes.append(cache & 0x0F)
+	return { "bytes": bytes, "predictor": pred, "index": idx }
+
+# Decode an ADPCM packet back into float samples [-1, 1]. Stateless: reads the
+# predictor/index from the packet header, so a dropped/reordered packet can't
+# corrupt later ones.
+static func adpcm_decode(bytes: PackedByteArray) -> PackedFloat32Array:
+	var out := PackedFloat32Array()
+	if bytes.size() < 3:
+		return out
+	var pred := bytes[0] | (bytes[1] << 8)
+	if pred >= 32768:
+		pred -= 65536                      # sign-extend the int16
+	var idx := clampi(bytes[2], 0, 88)
+	out.resize((bytes.size() - 3) * 2)
+	var oi := 0
+	for bi in range(3, bytes.size()):
+		var byte: int = bytes[bi]
+		for half in 2:
+			var code := (byte >> (4 * half)) & 0x0F
+			var step: int = _ADPCM_STEP_TABLE[idx]
+			var diffq := step >> 3
+			if code & 4: diffq += step
+			if code & 2: diffq += step >> 1
+			if code & 1: diffq += step >> 2
+			if code & 8: pred -= diffq
+			else:        pred += diffq
+			pred = clampi(pred, -32768, 32767)
+			idx  = clampi(idx + _ADPCM_INDEX_TABLE[code & 7], 0, 88)
+			out[oi] = float(pred) / 32767.0
+			oi += 1
+	return out
 
 # ── RPCs ──────────────────────────────────────────────────────────────────────
 
@@ -214,10 +329,11 @@ func _push_to_speaker(sender_id: int, bytes: PackedByteArray) -> void:
 	var pb: AudioStreamGeneratorPlayback = _speakers[sender_id]
 	if pb == null: return
 
+	var mono := adpcm_decode(bytes)
 	var frames = PackedVector2Array()
-	frames.resize(bytes.size())
-	for i in bytes.size():
-		var s = (float(bytes[i]) - 128.0) / 127.0
+	frames.resize(mono.size())
+	for i in mono.size():
+		var s := mono[i]
 		frames[i] = Vector2(s, s)
 	pb.push_buffer(frames)
 
