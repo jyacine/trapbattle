@@ -27,12 +27,19 @@ var _lobby_room: LobbyRoom = null
 var _countdown: float = 15.0
 var _counting:  bool  = false
 
+# True on a touch phone/tablet running the web build. There the Godot canvas can't
+# raise the browser soft keyboard for a LineEdit, so text fields are edited through
+# a native window.prompt() instead (see _prompt_edit).
+var _mobile_web: bool = false
+var _last_prompt_ms: int = 0   # debounce duplicate tap → prompt (touch + emulated mouse)
+
 # ────────────────────────────────────────────────────────────────────────────
 func _ready() -> void:
 	_net = get_parent().get_node("NetworkManager")
 	_net.lobby_ready.connect(_on_lobby_ready)
 	_net.lobby_updated.connect(_on_lobby_updated)
 	_net.connected.connect(_on_connected)
+	_mobile_web = OS.has_feature("web") and UIManager._is_mobile_device()
 	_build_menu()
 
 func _process(delta: float) -> void:
@@ -391,9 +398,13 @@ func _on_lobby_ready(seed_val: int) -> void:
 
 # ── Helper ────────────────────────────────────────────────────────────────────
 # Make a LineEdit usable on a phone: tall enough to tap reliably, the OS virtual
-# keyboard explicitly enabled, and a clear (✕) button so the field can be wiped
-# with one tap. Without the taller hit-box the field is hard to focus on mobile,
-# which is why the name could not be edited on a phone.
+# keyboard enabled (for native Android builds), and a clear (✕) button.
+#
+# On the WEB build the Godot canvas can't bring up the mobile browser's soft
+# keyboard for a LineEdit — there is no real DOM <input> to focus — so on a touch
+# phone tapping the field did nothing and the name couldn't be edited. There we
+# route editing through a native window.prompt() (which DOES open the keyboard) and
+# write the entered text back into the field.
 func _make_field_mobile_friendly(field: LineEdit) -> void:
 	field.custom_minimum_size = Vector2(0, 52)
 	field.virtual_keyboard_enabled = true
@@ -405,6 +416,38 @@ func _make_field_mobile_friendly(field: LineEdit) -> void:
 	# A taller field needs a wider tap target; grow the box downward so it does not
 	# collide with the control below it.
 	field.offset_bottom = field.offset_top + 52
+
+	if _mobile_web:
+		# Tapping the field opens the native browser prompt (the only reliable way
+		# to get the soft keyboard in a web canvas on a phone).
+		var label := field.placeholder_text if field.placeholder_text != "" else "Enter value"
+		field.gui_input.connect(func(ev: InputEvent):
+			var tapped := (ev is InputEventScreenTouch and ev.pressed) \
+				or (ev is InputEventMouseButton and ev.pressed)
+			if tapped:
+				_prompt_edit(field, label))
+
+# Edit a field via the browser's native window.prompt() — opens the mobile soft
+# keyboard, then writes the typed value back. Debounced so a single tap delivered
+# as both a touch and an emulated-mouse event can't pop two prompts.
+func _prompt_edit(field: LineEdit, label: String) -> void:
+	if not OS.has_feature("web"):
+		return
+	var now := Time.get_ticks_msec()
+	if now - _last_prompt_ms < 400:
+		return
+	var js := "window.prompt('%s', '%s')" % [_js_escape(label), _js_escape(field.text)]
+	var res = JavaScriptBridge.eval(js, true)
+	if res != null:                       # null = the user cancelled → keep current text
+		var s := str(res).strip_edges()
+		field.text = s
+		field.caret_column = s.length()
+	_last_prompt_ms = Time.get_ticks_msec()
+
+# Escape a string for embedding inside a single-quoted JavaScript string literal.
+# Static + pure so it can be unit-tested headless (see tests/test_name_input.gd).
+static func _js_escape(s: String) -> String:
+	return s.replace("\\", "\\\\").replace("'", "\\'").replace("\n", " ").replace("\r", " ")
 
 func _mk_btn(txt: String, col: Color) -> Button:
 	var btn = Button.new()
