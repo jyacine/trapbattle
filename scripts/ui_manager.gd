@@ -36,8 +36,8 @@ const MM_CELL   = 4
 const MM_MARGIN = 8
 
 # ── Exit / leave-match ─────────────────────────────────────────────────────────
-var _exit_btn:    Button
-var _exit_dialog: ConfirmationDialog
+var _exit_btn:     Button
+var _exit_overlay: Control   # custom in-canvas confirm — reliable touch on mobile web
 
 # ── Win overlay ───────────────────────────────────────────────────────────────
 var _overlay_panel: Panel
@@ -554,26 +554,89 @@ func _build_exit_button() -> void:
 	_exit_btn.pressed.connect(_on_exit_pressed)
 	add_child(_exit_btn)
 
-	# Confirmation dialog (embedded subwindow — renders inside the canvas on web/mobile).
-	_exit_dialog = ConfirmationDialog.new()
-	_exit_dialog.title         = "Leave match"
-	_exit_dialog.dialog_text   = "Leave the match and return to the menu?"
-	_exit_dialog.ok_button_text = "Leave"
-	_exit_dialog.get_cancel_button().text = "Stay"
-	_exit_dialog.confirmed.connect(_do_exit)
-	# Re-capture the mouse on desktop if the player decides to stay.
-	_exit_dialog.canceled.connect(func():
-		if not OS.has_feature("web"):
-			Input.mouse_mode = Input.MOUSE_MODE_CAPTURED)
-	add_child(_exit_dialog)
+	_build_exit_overlay()
+
+# In-canvas confirmation built from Control nodes (NOT a ConfirmationDialog, whose
+# embedded-subwindow buttons don't reliably receive touch / emulated-mouse input on
+# mobile web — tapping Stay/Leave did nothing). Plain Buttons in the CanvasLayer get
+# input exactly like the on-screen action buttons, so their `pressed` always fires.
+func _build_exit_overlay() -> void:
+	_exit_overlay = Control.new()
+	_exit_overlay.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_exit_overlay.mouse_filter = Control.MOUSE_FILTER_STOP   # absorb taps outside the panel
+	_exit_overlay.visible = false
+	add_child(_exit_overlay)
+
+	var dim = ColorRect.new()
+	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
+	dim.color = Color(0, 0, 0, 0.62)
+	_exit_overlay.add_child(dim)
+
+	var panel = Panel.new()
+	panel.anchor_left = 0.5; panel.anchor_right  = 0.5
+	panel.anchor_top  = 0.5; panel.anchor_bottom = 0.5
+	panel.offset_left = -210; panel.offset_right  = 210
+	panel.offset_top  = -115; panel.offset_bottom = 115
+	var psb = StyleBoxFlat.new()
+	psb.bg_color     = Color(0.10, 0.11, 0.15, 0.98)
+	psb.border_color = Color(1.0, 0.45, 0.45, 0.90)
+	psb.set_border_width_all(2); psb.set_corner_radius_all(10)
+	panel.add_theme_stylebox_override("panel", psb)
+	_exit_overlay.add_child(panel)
+
+	var msg = Label.new()
+	msg.text = "Leave the match and return to the menu?"
+	msg.add_theme_font_size_override("font_size", 20)
+	msg.add_theme_color_override("font_color", Color.WHITE)
+	msg.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	msg.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	msg.anchor_left = 0.0; msg.anchor_right  = 1.0
+	msg.offset_left = 20;  msg.offset_right  = -20
+	msg.offset_top  = 26;  msg.offset_bottom = 120
+	panel.add_child(msg)
+
+	var stay_btn = _mk_confirm_btn("Stay", Color(0.20, 0.40, 0.72))
+	stay_btn.anchor_left = 0.0; stay_btn.anchor_right  = 0.5
+	stay_btn.anchor_top  = 1.0; stay_btn.anchor_bottom = 1.0
+	stay_btn.offset_left = 22; stay_btn.offset_right  = -11
+	stay_btn.offset_top  = -74; stay_btn.offset_bottom = -22
+	stay_btn.pressed.connect(_on_exit_stay)
+	panel.add_child(stay_btn)
+
+	var leave_btn = _mk_confirm_btn("Leave", Color(0.68, 0.18, 0.18))
+	leave_btn.anchor_left = 0.5; leave_btn.anchor_right  = 1.0
+	leave_btn.anchor_top  = 1.0; leave_btn.anchor_bottom = 1.0
+	leave_btn.offset_left = 11; leave_btn.offset_right  = -22
+	leave_btn.offset_top  = -74; leave_btn.offset_bottom = -22
+	leave_btn.pressed.connect(_do_exit)
+	panel.add_child(leave_btn)
+
+func _mk_confirm_btn(txt: String, col: Color) -> Button:
+	var b = Button.new()
+	b.text = txt
+	b.add_theme_font_size_override("font_size", 22)
+	b.add_theme_color_override("font_color", Color.WHITE)
+	var sb = StyleBoxFlat.new()
+	sb.bg_color     = col
+	sb.border_color = col.lightened(0.25)
+	sb.set_border_width_all(2); sb.set_corner_radius_all(8)
+	b.add_theme_stylebox_override("normal",  sb)
+	b.add_theme_stylebox_override("hover",   sb)
+	b.add_theme_stylebox_override("pressed", sb.duplicate())
+	return b
 
 func _on_exit_pressed() -> void:
-	if _exit_dialog == null: return
-	# Free the cursor so the dialog buttons are clickable on desktop (mouse is
-	# captured during play); on web/mobile the cursor is already free.
+	if _exit_overlay == null: return
+	# Free the cursor so the buttons are clickable on desktop (mouse is captured
+	# during play); on web/mobile the cursor is already free.
 	if not OS.has_feature("web"):
 		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
-	_exit_dialog.popup_centered()
+	_exit_overlay.visible = true
+
+func _on_exit_stay() -> void:
+	if _exit_overlay: _exit_overlay.visible = false
+	if not OS.has_feature("web"):
+		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 
 func _do_exit() -> void:
 	if multiplayer.has_multiplayer_peer():
@@ -646,9 +709,10 @@ func _build_mobile_buttons() -> void:
 	if player == null: return
 	if not _is_mobile_device(): return
 
-	const FSZ := 120.0   # fire button diameter
-	const TSZ :=  90.0   # trap button diameter
+	const FSZ := 92.0    # fire button diameter (smaller — less screen clutter)
+	const TSZ :=  68.0   # trap button diameter
 	const MG  :=  20     # screen-edge margin
+	const ACT_ANCHOR := 0.66   # vertical anchor for action buttons (raised a bit)
 
 	# Joystick outer ring — fixed at bottom-left, always visible
 	_joy_base_nd = _circle_panel(_JOY_BASE, Color(0.12, 0.14, 0.18, 0.42), Color(0.90, 0.90, 0.90, 0.55), 3)
@@ -665,7 +729,7 @@ func _build_mobile_buttons() -> void:
 	# FIRE button — gun icon, centred at 30% from left
 	_fire_nd = _action_image_button(FSZ, "res://assets/icons/icon_gun.svg")
 	_fire_nd.anchor_left   = 0.75; _fire_nd.anchor_right  = 0.75
-	_fire_nd.anchor_top    = 0.72; _fire_nd.anchor_bottom = 0.72
+	_fire_nd.anchor_top    = ACT_ANCHOR; _fire_nd.anchor_bottom = ACT_ANCHOR
 	_fire_nd.offset_left   = -FSZ * 0.5; _fire_nd.offset_right  = FSZ * 0.5
 	_fire_nd.offset_top    = -FSZ * 0.5; _fire_nd.offset_bottom = FSZ * 0.5
 	add_child(_fire_nd)
@@ -673,7 +737,7 @@ func _build_mobile_buttons() -> void:
 	# TRAP button — bomb icon, above fire button, same right edge
 	_trap_nd = _action_image_button(TSZ, "res://assets/icons/icon_bomb.svg")
 	_trap_nd.anchor_left   = 1.0; _trap_nd.anchor_right  = 1.0
-	_trap_nd.anchor_top    = 0.72; _trap_nd.anchor_bottom = 0.72
+	_trap_nd.anchor_top    = ACT_ANCHOR; _trap_nd.anchor_bottom = ACT_ANCHOR
 	_trap_nd.offset_left   = -(TSZ + MG); _trap_nd.offset_right  = -MG
 	_trap_nd.offset_top    = -(FSZ * 0.5 + MG + TSZ); _trap_nd.offset_bottom = -(FSZ * 0.5 + MG)
 	add_child(_trap_nd)
@@ -685,7 +749,7 @@ func _build_mobile_buttons() -> void:
 			const VSZ := 68.0
 			# Trap top = -(FSZ*0.5 + MG + TSZ); voice sits 12px above that
 			var v_bot := -(FSZ * 0.5 + MG + TSZ + 12)
-			# (anchor_top = 0.72 matches fire/trap buttons)
+			# (anchor_top matches fire/trap buttons — ACT_ANCHOR)
 			var btn_voice = Button.new()
 			btn_voice.text = "🎤\nON"
 			btn_voice.add_theme_font_size_override("font_size", 14)
@@ -697,7 +761,7 @@ func _build_mobile_buttons() -> void:
 			btn_voice.add_theme_stylebox_override("normal", vsb)
 			btn_voice.add_theme_stylebox_override("pressed", vsb)
 			btn_voice.anchor_left   = 1.0; btn_voice.anchor_right  = 1.0
-			btn_voice.anchor_top    = 0.72; btn_voice.anchor_bottom = 0.72
+			btn_voice.anchor_top    = ACT_ANCHOR; btn_voice.anchor_bottom = ACT_ANCHOR
 			btn_voice.offset_right  = -MG
 			btn_voice.offset_left   = -(VSZ + MG)
 			btn_voice.offset_top    = v_bot - VSZ
@@ -914,6 +978,11 @@ func _input(event: InputEvent) -> void:
 	if not _is_mobile_device(): return
 	if player == null or not game_manager.is_playing: return
 
+	# While the leave-match confirm is open, let touches reach its Stay/Leave
+	# buttons instead of being captured for look / joystick / fire.
+	if _exit_overlay != null and _exit_overlay.visible:
+		return
+
 	var vp_hw: float = get_viewport().get_visible_rect().size.x * 0.5
 
 	if event is InputEventScreenTouch:
@@ -969,11 +1038,13 @@ func _input(event: InputEvent) -> void:
 			_joy_update(drag.position)
 			get_viewport().set_input_as_handled()
 		elif event.index == _look_id:
-			var sens: float = player.mouse_sensitivity * 1.8
+			# Higher gain so a short finger swipe turns a useful amount (was 1.8 —
+			# turning felt sluggish, needing a long drag for a small turn).
+			var sens: float = player.mouse_sensitivity * 3.2
 			# Clamp a single (possibly browser-coalesced) drag delta so a frame
 			# hitch near a wall can't deliver one huge lump that snaps the view.
-			var dx := clampf(drag.relative.x, -45.0, 45.0)
-			var dy := clampf(drag.relative.y, -45.0, 45.0)
+			var dx := clampf(drag.relative.x, -60.0, 60.0)
+			var dy := clampf(drag.relative.y, -60.0, 60.0)
 			player._pending_yaw_delta -= dx * sens
 			player.pitch = clamp(player.pitch - dy * sens, -PI / 3.0, PI / 3.0)
 			if player.camera_node:
