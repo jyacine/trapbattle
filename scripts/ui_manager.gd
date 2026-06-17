@@ -802,11 +802,11 @@ func _build_voice_button() -> void:
 	_voice_btn.add_theme_stylebox_override("normal",  vsb)
 	_voice_btn.add_theme_stylebox_override("hover",   vsb)
 	_voice_btn.add_theme_stylebox_override("pressed", vsb.duplicate())
-	# Mid-left edge, vertically centred a little above middle.
-	_voice_btn.anchor_left  = 0.0; _voice_btn.anchor_right  = 0.0
+	# Mid-right edge, vertically centred a little above middle.
+	_voice_btn.anchor_left  = 1.0; _voice_btn.anchor_right  = 1.0
 	_voice_btn.anchor_top   = 0.42; _voice_btn.anchor_bottom = 0.42
-	_voice_btn.offset_left  = VMG;        _voice_btn.offset_right  = VMG + VSZ
-	_voice_btn.offset_top   = -VSZ * 0.5; _voice_btn.offset_bottom = VSZ * 0.5
+	_voice_btn.offset_left  = -(VMG + VSZ); _voice_btn.offset_right  = -VMG
+	_voice_btn.offset_top   = -VSZ * 0.5;   _voice_btn.offset_bottom = VSZ * 0.5
 	add_child(_voice_btn)
 
 	# Mic / mute icon centred on the button (swapped by VoiceManager on toggle).
