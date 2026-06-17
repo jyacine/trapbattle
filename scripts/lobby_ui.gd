@@ -45,7 +45,7 @@ func _ready() -> void:
 func _process(delta: float) -> void:
 	if _ping_label and _ping_label.visible:
 		var ms = _net.ping_ms
-		_ping_label.text = "â— %d ms" % ms
+		_ping_label.text = "• %d ms" % ms
 		var col: Color
 		if ms < 50:
 			col = Color(0.2, 1.0, 0.2)

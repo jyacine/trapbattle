@@ -141,10 +141,10 @@ func stop_transmitting()  -> void: mute()
 func _update_button() -> void:
 	if voice_button == null or not is_instance_valid(voice_button): return
 	if _transmitting:
-		voice_button.text     = "🎤\nON"
+		voice_button.text     = "MIC\nON"
 		voice_button.modulate = Color(1, 1, 1)
 	else:
-		voice_button.text     = "🔇\nMUTE"
+		voice_button.text     = "MIC\nOFF"
 		voice_button.modulate = Color(1.0, 0.4, 0.4)
 
 # ── Capture & send ────────────────────────────────────────────────────────────
