@@ -9,6 +9,9 @@ export/
 # Local scripts
 publish.ps1
 
+# AI instructions — local only
+CLAUDE.md
+
 # OS
 .DS_Store
 Thumbs.db
