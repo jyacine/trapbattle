@@ -1039,8 +1039,8 @@ func _input(event: InputEvent) -> void:
 			get_viewport().set_input_as_handled()
 		elif event.index == _look_id:
 			# Higher gain so a short finger swipe turns a useful amount (was 1.8 —
-			# turning felt sluggish, needing a long drag for a small turn).
-			var sens: float = player.mouse_sensitivity * 3.2
+			# turning felt sluggish; 3.2 was a touch too twitchy, so 2.6).
+			var sens: float = player.mouse_sensitivity * 2.6
 			# Clamp a single (possibly browser-coalesced) drag delta so a frame
 			# hitch near a wall can't deliver one huge lump that snaps the view.
 			var dx := clampf(drag.relative.x, -60.0, 60.0)
