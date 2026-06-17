@@ -1,4 +1,4 @@
-extends CanvasLayer
+﻿extends CanvasLayer
 class_name LobbyUI
 
 signal start_game(seed_val: int, is_mp: bool)
@@ -31,9 +31,9 @@ var _counting:  bool  = false
 # raise the browser soft keyboard for a LineEdit, so text fields are edited through
 # a native window.prompt() instead (see _prompt_edit).
 var _mobile_web: bool = false
-var _last_prompt_ms: int = 0   # debounce duplicate tap → prompt (touch + emulated mouse)
+var _last_prompt_ms: int = 0   # debounce duplicate tap â†’ prompt (touch + emulated mouse)
 
-# ────────────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 func _ready() -> void:
 	_net = get_parent().get_node("NetworkManager")
 	_net.lobby_ready.connect(_on_lobby_ready)
@@ -45,7 +45,7 @@ func _ready() -> void:
 func _process(delta: float) -> void:
 	if _ping_label and _ping_label.visible:
 		var ms = _net.ping_ms
-		_ping_label.text = "● %d ms" % ms
+		_ping_label.text = "â— %d ms" % ms
 		var col: Color
 		if ms < 50:
 			col = Color(0.2, 1.0, 0.2)
@@ -71,7 +71,7 @@ func _process(delta: float) -> void:
 		if _net.is_captain:
 			_net.request_start()
 
-# ── Initial menu screen ──────────────────────────────────────────────────────
+# â”€â”€ Initial menu screen â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 func _build_menu() -> void:
 	var bg = ColorRect.new()
 	bg.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -91,7 +91,7 @@ func _build_menu() -> void:
 	_menu_nodes.append(title)
 
 	var sub = Label.new()
-	sub.text = "First-person maze trap battle  —  up to 10 players"
+	sub.text = "First-person maze trap battle  â€”  up to 10 players"
 	sub.add_theme_font_size_override("font_size", 18)
 	sub.add_theme_color_override("font_color", Color(0.7, 0.7, 0.8))
 	sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -215,7 +215,7 @@ func _build_menu() -> void:
 	add_child(hint)
 	_menu_nodes.append(hint)
 
-# ── Lobby overlay (2D HUD on top of the 3D room) ─────────────────────────────
+# â”€â”€ Lobby overlay (2D HUD on top of the 3D room) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 func _build_lobby_overlay() -> void:
 	# Top bar
 	var top_bar = ColorRect.new()
@@ -236,7 +236,7 @@ func _build_lobby_overlay() -> void:
 
 	# Countdown / status centred in the top bar
 	_countdown_label = Label.new()
-	_countdown_label.text = "Waiting for more players…"
+	_countdown_label.text = "Waiting for more playersâ€¦"
 	_countdown_label.add_theme_font_size_override("font_size", 22)
 	_countdown_label.add_theme_color_override("font_color", Color(0.7, 0.88, 1.0))
 	_countdown_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -245,7 +245,7 @@ func _build_lobby_overlay() -> void:
 	_countdown_label.offset_top    = 24;   _countdown_label.offset_bottom = 66
 	add_child(_countdown_label)
 
-	# Left panel — player list
+	# Left panel â€” player list
 	var left_bg = ColorRect.new()
 	left_bg.color = Color(0, 0, 0, 0.45)
 	left_bg.anchor_left   = 0.0; left_bg.anchor_right  = 0.0
@@ -255,7 +255,7 @@ func _build_lobby_overlay() -> void:
 	add_child(left_bg)
 
 	_player_list = Label.new()
-	_player_list.text = "Waiting for players…"
+	_player_list.text = "Waiting for playersâ€¦"
 	_player_list.add_theme_font_size_override("font_size", 15)
 	_player_list.add_theme_color_override("font_color", Color(0.82, 0.92, 1.0))
 	_player_list.anchor_left   = 0.0; _player_list.anchor_right  = 0.0
@@ -278,7 +278,7 @@ func _build_lobby_overlay() -> void:
 	add_child(_ping_label)
 
 	# START GAME button (captain only, bottom-centre)
-	_start_btn = _mk_btn("▶  START GAME", Color(0.0, 0.55, 0.10))
+	_start_btn = _mk_btn("â–¶  START GAME", Color(0.0, 0.55, 0.10))
 	_start_btn.anchor_left   = 0.5;  _start_btn.anchor_right  = 0.5
 	_start_btn.anchor_top    = 1.0;  _start_btn.anchor_bottom = 1.0
 	_start_btn.offset_left   = -160; _start_btn.offset_right  = 160
@@ -287,7 +287,7 @@ func _build_lobby_overlay() -> void:
 	_start_btn.pressed.connect(_on_start_pressed)
 	add_child(_start_btn)
 
-# ── Transition from menu → 3-D lobby room ────────────────────────────────────
+# â”€â”€ Transition from menu â†’ 3-D lobby room â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 func _enter_lobby_room() -> void:
 	for c: Node in _menu_nodes:
 		if is_instance_valid(c):
@@ -299,7 +299,7 @@ func _enter_lobby_room() -> void:
 
 	_build_lobby_overlay()
 
-# ── Button callbacks ──────────────────────────────────────────────────────────
+# â”€â”€ Button callbacks â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 func _on_single_player() -> void:
 	start_game.emit(0, false)
 	queue_free()
@@ -329,15 +329,15 @@ func _on_host() -> void:
 func _on_join() -> void:
 	_apply_identity()
 	var ip = _ip_field.text.strip_edges()
-	_status.text = "Connecting to %s …" % ip
+	_status.text = "Connecting to %s â€¦" % ip
 	_net.join_game(ip)
 
 func _on_connected() -> void:
 	_enter_lobby_room()
 	if _countdown_label:
-		_countdown_label.text = "Connected — waiting for host…"
+		_countdown_label.text = "Connected â€” waiting for hostâ€¦"
 
-# ── Lobby update from NetworkManager ─────────────────────────────────────────
+# â”€â”€ Lobby update from NetworkManager â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 func _on_lobby_updated(peer_ids: Array) -> void:
 	var names      = _net.player_names
 	var color_idxs = _net.player_color_indices
@@ -353,7 +353,7 @@ func _on_lobby_updated(peer_ids: Array) -> void:
 		for i: int in peer_ids.size():
 			var pid = peer_ids[i]
 			var pname = names.get(pid, "Player %d" % (i + 1))
-			var txt   = "  ● %s" % pname
+			var txt   = "  â— %s" % pname
 			if multiplayer.has_multiplayer_peer() and pid == multiplayer.get_unique_id():
 				txt += "  (you)"
 			if i == 0:
@@ -364,7 +364,7 @@ func _on_lobby_updated(peer_ids: Array) -> void:
 			+ "\n".join(lines)
 		)
 
-	# Countdown: start (15 s) when ≥ 2 players are in the lobby
+	# Countdown: start (15 s) when â‰¥ 2 players are in the lobby
 	if peer_ids.size() >= 2:
 		if not _counting:
 			_counting  = true
@@ -375,11 +375,11 @@ func _on_lobby_updated(peer_ids: Array) -> void:
 		_counting = false
 		if _countdown_label:
 			var waiting_for = 2 - peer_ids.size()
-			_countdown_label.text = "Waiting for %d more player%s…" % \
+			_countdown_label.text = "Waiting for %d more player%sâ€¦" % \
 				[waiting_for, "s" if waiting_for != 1 else ""]
 			_countdown_label.add_theme_color_override("font_color", Color(0.7, 0.88, 1.0))
 
-	# START button: captain only, requires ≥ 2 players
+	# START button: captain only, requires â‰¥ 2 players
 	if _start_btn:
 		_start_btn.visible  = _net.is_captain and peer_ids.size() >= 2
 		_start_btn.disabled = false
@@ -396,12 +396,12 @@ func _on_lobby_ready(seed_val: int) -> void:
 	start_game.emit(seed_val, true)
 	queue_free()
 
-# ── Helper ────────────────────────────────────────────────────────────────────
+# â”€â”€ Helper â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # Make a LineEdit usable on a phone: tall enough to tap reliably, the OS virtual
-# keyboard enabled (for native Android builds), and a clear (✕) button.
+# keyboard enabled (for native Android builds), and a clear (âœ•) button.
 #
 # On the WEB build the Godot canvas can't bring up the mobile browser's soft
-# keyboard for a LineEdit — there is no real DOM <input> to focus — so on a touch
+# keyboard for a LineEdit â€” there is no real DOM <input> to focus â€” so on a touch
 # phone tapping the field did nothing and the name couldn't be edited. There we
 # route editing through a native window.prompt() (which DOES open the keyboard) and
 # write the entered text back into the field.
@@ -422,12 +422,12 @@ func _make_field_mobile_friendly(field: LineEdit) -> void:
 		# to get the soft keyboard in a web canvas on a phone).
 		var label := field.placeholder_text if field.placeholder_text != "" else "Enter value"
 		field.gui_input.connect(func(ev: InputEvent):
-			var tapped := (ev is InputEventScreenTouch and ev.pressed) \
+			var tapped: bool = (ev is InputEventScreenTouch and ev.pressed) \
 				or (ev is InputEventMouseButton and ev.pressed)
 			if tapped:
 				_prompt_edit(field, label))
 
-# Edit a field via the browser's native window.prompt() — opens the mobile soft
+# Edit a field via the browser's native window.prompt() â€” opens the mobile soft
 # keyboard, then writes the typed value back. Debounced so a single tap delivered
 # as both a touch and an emulated-mouse event can't pop two prompts.
 func _prompt_edit(field: LineEdit, label: String) -> void:
@@ -438,7 +438,7 @@ func _prompt_edit(field: LineEdit, label: String) -> void:
 		return
 	var js := "window.prompt('%s', '%s')" % [_js_escape(label), _js_escape(field.text)]
 	var res = JavaScriptBridge.eval(js, true)
-	if res != null:                       # null = the user cancelled → keep current text
+	if res != null:                       # null = the user cancelled â†’ keep current text
 		var s := str(res).strip_edges()
 		field.text = s
 		field.caret_column = s.length()
