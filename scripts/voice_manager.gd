@@ -8,16 +8,17 @@ class_name VoiceManager
 #      to MUTE / UNMUTE (toggle).
 #   2. Voice-activity detection (VAD): audio is only sent while you are actually
 #      speaking — silence is never transmitted, which slashes server relay load.
-#   3. Captured PCM is resampled to VOICE_RATE and compressed with 4-bit IMA-ADPCM
-#      before it is relayed through the server to all other peers. ADPCM halves the
-#      bytes of the old 8-bit PCM, and the lower rate trims more — together ~60 %
-#      less relay traffic, still clearly intelligible.  The server forwards the
-#      bytes opaquely (no decode), so this is a pure client-side optimisation.
-#   4. player_speaking_changed fires so the UI can show / hide the 🔊 icon.
+#      Captured PCM is anti-alias downsampled to VOICE_RATE (16 kHz wideband) and
+#      compressed with 4-bit IMA-ADPCM (~0.5 byte/sample ≈ 64 kbps while speaking)
+#      before it is relayed through the server to all other peers. The server
+#      forwards the bytes opaquely (no decode), so codec/rate are a client-only
+#      concern — no server change is needed to tune them.
+#   4. player_speaking_changed fires so the UI can show / hide the speaking icon.
+#   NOTE: the mic bus is MUTED locally (see _setup_mic) so you never hear yourself.
 
 signal player_speaking_changed(pid: int, is_speaking: bool)
 
-const VOICE_RATE      := 8000    # send/playback rate — telephone quality, intelligible
+const VOICE_RATE      := 16000   # send/playback rate — wideband voice (8 kHz band), clear
 const SEND_INTERVAL   := 0.06    # seconds between audio packets
 const SPEAKING_TIMEOUT := 0.30   # silence after last packet → "stopped speaking"
 const VAD_THRESHOLD   := 0.010   # mic RMS above this counts as speech (favor transmitting)
@@ -81,12 +82,16 @@ func _setup_mic() -> void:
 	_capture_rate = AudioServer.get_mix_rate()
 	if AudioServer.get_bus_index(MIC_BUS) == -1:
 		AudioServer.add_bus()
-		var bus_idx = AudioServer.bus_count - 1
-		AudioServer.set_bus_name(bus_idx, MIC_BUS)
-		AudioServer.set_bus_send(bus_idx, "")   # capture only — no loopback
-		AudioServer.add_bus_effect(bus_idx, AudioEffectCapture.new())
+		var new_idx = AudioServer.bus_count - 1
+		AudioServer.set_bus_name(new_idx, MIC_BUS)
+		AudioServer.add_bus_effect(new_idx, AudioEffectCapture.new())
 
 	var bus_idx = AudioServer.get_bus_index(MIC_BUS)
+	# MUTE the mic bus output so we never hear our own voice locally (monitoring
+	# loopback — the cause of "I hear myself when talking"). The AudioEffectCapture
+	# sits in the effect chain *before* the mute stage, so mic capture still works;
+	# only the send to the speakers (Master) is silenced.
+	AudioServer.set_bus_mute(bus_idx, true)
 	_mic_capture = AudioServer.get_bus_effect(bus_idx, 0) as AudioEffectCapture
 
 	_mic_player = AudioStreamPlayer.new()
@@ -195,8 +200,15 @@ func _capture_and_send() -> void:
 	else:
 		_rpc_voice.rpc_id(1, bytes, my_id)
 
-# Linear-resample mono samples (frames[i].x) from src_rate to dst_rate, returning
-# float samples in [-1, 1]. Robust to 44100 or 48000 Hz capture devices.
+# Resample mono samples (frames[i].x) from src_rate to dst_rate, returning float
+# samples in [-1, 1]. Robust to 44100 or 48000 Hz capture devices.
+#
+# When DOWNSAMPLING (the usual case: 44.1/48 kHz capture -> 16 kHz voice) we average
+# all source samples that fall inside each output sample's window (a box low-pass)
+# instead of point/linear sampling. Naive interpolation skips most input samples and
+# folds frequencies above the new Nyquist back into the band as harsh aliasing noise
+# — a major cause of the "bad quality". Averaging band-limits before decimation.
+# When upsampling we fall back to linear interpolation.
 func _resample(frames: PackedVector2Array, src_rate: float, dst_rate: float) -> PackedFloat32Array:
 	var n_in := frames.size()
 	if n_in == 0 or src_rate <= 0.0:
@@ -207,14 +219,30 @@ func _resample(frames: PackedVector2Array, src_rate: float, dst_rate: float) -> 
 		return PackedFloat32Array()
 	var out := PackedFloat32Array()
 	out.resize(n_out)
-	for j in n_out:
-		var src_pos := float(j) / ratio
-		var i0 := int(src_pos)
-		var i1: int = min(i0 + 1, n_in - 1)
-		var frac := src_pos - float(i0)
-		var f0: Vector2 = frames[i0]
-		var f1: Vector2 = frames[i1]
-		out[j] = f0.x + (f1.x - f0.x) * frac
+	var step := src_rate / dst_rate   # input samples per output sample
+	if step > 1.0:
+		# Downsample: average the input window [j*step, (j+1)*step) — anti-aliasing.
+		for j in n_out:
+			var start_f := float(j) * step
+			var end_f := start_f + step
+			var i0 := int(start_f)
+			var i1: int = min(int(end_f), n_in - 1)
+			var sum := 0.0
+			var cnt := 0
+			for i in range(i0, i1 + 1):
+				sum += frames[i].x
+				cnt += 1
+			out[j] = sum / float(max(1, cnt))
+	else:
+		# Upsample (or 1:1): linear interpolation.
+		for j in n_out:
+			var src_pos := float(j) / ratio
+			var i0 := int(src_pos)
+			var i1: int = min(i0 + 1, n_in - 1)
+			var frac := src_pos - float(i0)
+			var f0: Vector2 = frames[i0]
+			var f1: Vector2 = frames[i1]
+			out[j] = f0.x + (f1.x - f0.x) * frac
 	return out
 
 # ── IMA-ADPCM codec (static + pure → unit-testable headless) ──────────────────
