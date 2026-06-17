@@ -1,4 +1,4 @@
-﻿extends CharacterBody3D
+extends CharacterBody3D
 
 class_name Player
 
@@ -29,7 +29,7 @@ const LOOK_SMOOTH_RATE := 25.0
 # in one physics step, snapping the view mid-turn — which feels chaotic when also
 # moving. Bounding the per-frame turn keeps it smooth. Generous enough that normal
 # swipes are unaffected. Desktop mouse is left uncapped (its deltas are tiny).
-const TOUCH_MAX_LOOK_RATE := 9.0
+const TOUCH_MAX_LOOK_RATE := 13.0
 # Largest buffered look delta we keep; anything beyond ~half a turn is a spurious
 # burst and is discarded so it can't accumulate into a runaway spin.
 const MAX_PENDING_YAW := PI
@@ -169,8 +169,8 @@ func _physics_process(delta: float) -> void:
 	_dbg_last_yaw = yaw
 
 	var can_move = not (game_manager.has_effect(peer_id, "glue") or
-	                    game_manager.has_effect(peer_id, "cage") or
-	                    game_manager.has_effect(peer_id, "electric"))
+						game_manager.has_effect(peer_id, "cage") or
+						game_manager.has_effect(peer_id, "electric"))
 
 	if can_move:
 		var speed_mult = 0.25 if game_manager.has_effect(peer_id, "freeze") else 1.0
@@ -322,7 +322,7 @@ func _try_place() -> void:
 	var throw_pos  = position + forward * Config.CELL_SIZE
 	var throw_cell = game_manager.world_to_grid(throw_pos)
 	var target_cell = throw_cell if game_manager.is_floor(throw_cell[0], throw_cell[1]) \
-	                             else current_grid_pos
+								 else current_grid_pos
 	if multiplayer.has_multiplayer_peer():
 		trap_manager.net_place_trap.rpc(target_cell, peer_id, trap_type)
 	else:
