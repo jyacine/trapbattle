@@ -25,6 +25,17 @@ const VAD_THRESHOLD   := 0.010   # mic RMS above this counts as speech (favor tr
 const VAD_HANGOVER    := 0.40    # keep transmitting this long after speech dips
 const MIC_BUS         := "VoiceMic"
 
+# ── Jitter buffer (fixes choppy playback) ────────────────────────────────────
+# Voice rides the game's WebSocket (TCP) multiplayer channel, so packets arrive in
+# jittery bursts (TCP head-of-line blocking under loss). Pushing them straight into
+# the audio generator underran it between bursts → choppy. Instead we QUEUE incoming
+# audio per speaker and keep the generator topped up to a target depth, starting
+# playout only after a small prebuffer. This trades a little latency for smoothness.
+const GEN_BUFFER_LEN := 0.30    # AudioStreamGenerator internal buffer (s)
+const JITTER_TARGET  := 0.12    # keep ~this much buffered in the generator (jitter tolerance)
+const JITTER_PREBUF  := 0.12    # accumulate this much before (re)starting playout
+const JITTER_MAX     := 0.40    # cap queued audio; drop oldest beyond this (bounds latency)
+
 # ── IMA-ADPCM codec tables (standard) ────────────────────────────────────────
 # 4 bits/sample. Each relayed packet is self-contained: a 3-byte header carries
 # the encoder's predictor (int16 LE) + step index (u8) at the packet's start, then
@@ -60,6 +71,11 @@ var _enc_index:     int = 0
 # peer_id → AudioStreamGeneratorPlayback  (remote voices)
 var _speakers:      Dictionary = {}
 var _speaker_nodes: Dictionary = {}
+
+# Per-speaker jitter buffer state
+var _jq:     Dictionary = {}   # pid → PackedVector2Array (queued frames awaiting playout)
+var _jq_pos: Dictionary = {}   # pid → int read offset into _jq[pid]
+var _jq_play: Dictionary = {}  # pid → bool (true = playing, false = (re)prebuffering)
 
 # How long since we last received audio from each remote peer
 var _speaking_timers: Dictionary = {}  # pid → float countdown
@@ -117,6 +133,9 @@ func _process(delta: float) -> void:
 		if _send_timer <= 0.0:
 			_send_timer = SEND_INTERVAL
 			_capture_and_send()
+
+	# Drain the jitter buffers into the audio generators at a steady depth.
+	_pump_speakers()
 
 # ── Keyboard toggle (V = mute / unmute) ──────────────────────────────────────
 func _input(event: InputEvent) -> void:
@@ -347,11 +366,14 @@ func _rpc_play_voice(audio_bytes: PackedByteArray, sender_id: int) -> void:
 	_push_to_speaker(sender_id, audio_bytes)
 
 # ── Playback ──────────────────────────────────────────────────────────────────
+# Decode an incoming packet and QUEUE it (the jitter buffer). _pump_speakers feeds
+# the generator from the queue at a steady depth — never push straight to the
+# generator here or bursty TCP arrival makes it underrun (choppy).
 func _push_to_speaker(sender_id: int, bytes: PackedByteArray) -> void:
 	if not _speakers.has(sender_id):
 		var gen    = AudioStreamGenerator.new()
 		gen.mix_rate      = VOICE_RATE
-		gen.buffer_length = 0.2
+		gen.buffer_length = GEN_BUFFER_LEN
 		var player = AudioStreamPlayer.new()
 		player.stream    = gen
 		player.volume_db = 0.0
@@ -359,17 +381,63 @@ func _push_to_speaker(sender_id: int, bytes: PackedByteArray) -> void:
 		add_child(player)
 		_speaker_nodes[sender_id] = player
 		_speakers[sender_id]      = player.get_stream_playback() as AudioStreamGeneratorPlayback
-
-	var pb: AudioStreamGeneratorPlayback = _speakers[sender_id]
-	if pb == null: return
+		_jq[sender_id]      = PackedVector2Array()
+		_jq_pos[sender_id]  = 0
+		_jq_play[sender_id] = false
 
 	var mono := adpcm_decode(bytes)
-	var frames = PackedVector2Array()
+	var frames := PackedVector2Array()
 	frames.resize(mono.size())
 	for i in mono.size():
 		var s := mono[i]
 		frames[i] = Vector2(s, s)
-	pb.push_buffer(frames)
+
+	var q: PackedVector2Array = _jq[sender_id]
+	q.append_array(frames)
+	# Bound queued latency: if a burst overfills, drop the oldest frames.
+	var pos: int = _jq_pos[sender_id]
+	var max_frames := int(JITTER_MAX * float(VOICE_RATE))
+	if q.size() - pos > max_frames:
+		q = q.slice(q.size() - max_frames)
+		_jq_pos[sender_id] = 0
+	_jq[sender_id] = q
+
+# Feed each speaker's generator from its jitter queue, keeping ~JITTER_TARGET
+# buffered. Playout starts only once JITTER_PREBUF has accumulated, and re-buffers
+# after a full underrun so a single long gap doesn't cause continuous stutter.
+func _pump_speakers() -> void:
+	var rate := float(VOICE_RATE)
+	var cap := int(GEN_BUFFER_LEN * rate)
+	var target := int(JITTER_TARGET * rate)
+	var prebuf := int(JITTER_PREBUF * rate)
+	for pid in _speakers.keys():
+		var pb: AudioStreamGeneratorPlayback = _speakers[pid]
+		if pb == null:
+			continue
+		var q: PackedVector2Array = _jq.get(pid, PackedVector2Array())
+		var pos: int = _jq_pos.get(pid, 0)
+		var queued := q.size() - pos
+		var buffered := cap - pb.get_frames_available()
+		if not bool(_jq_play.get(pid, false)):
+			if queued >= prebuf:
+				_jq_play[pid] = true
+			else:
+				continue   # still prebuffering
+		var deficit := target - buffered
+		if deficit <= 0:
+			continue       # generator already holds enough; keep the rest queued
+		var n: int = min(deficit, queued)
+		if n <= 0:
+			if buffered <= 0:
+				_jq_play[pid] = false   # fully drained → re-prebuffer
+			continue
+		pb.push_buffer(q.slice(pos, pos + n))
+		pos += n
+		_jq_pos[pid] = pos
+		# Compact the queue periodically so the read offset can't grow unbounded.
+		if pos > prebuf * 2:
+			_jq[pid] = q.slice(pos)
+			_jq_pos[pid] = 0
 
 # ── Cleanup ───────────────────────────────────────────────────────────────────
 func remove_speaker(pid: int) -> void:
@@ -378,5 +446,8 @@ func remove_speaker(pid: int) -> void:
 		if is_instance_valid(node): node.queue_free()
 		_speaker_nodes.erase(pid)
 		_speakers.erase(pid)
+	_jq.erase(pid)
+	_jq_pos.erase(pid)
+	_jq_play.erase(pid)
 	_speaking_timers.erase(pid)
 	player_speaking_changed.emit(pid, false)
