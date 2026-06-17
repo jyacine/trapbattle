@@ -13,6 +13,11 @@ var _net: NetworkManager
 const HEART_TEX := preload("res://assets/icons/icon_heart.svg")
 const HEART_COLOR := Color(0.95, 0.35, 0.35)
 
+# Voice icons (the emoji glyphs aren't in the default font, so use SVG textures).
+const MIC_TEX     := preload("res://assets/icons/icon_mic.svg")      # 🎤 mic on
+const MUTE_TEX    := preload("res://assets/icons/icon_mute.svg")     # 🔇 muted
+const SPEAKER_TEX := preload("res://assets/icons/icon_speaker.svg")  # 🔊 speaking
+
 # ── HUD labels ────────────────────────────────────────────────────────────────
 var _kills_label:   Label
 var _lives_box:     HBoxContainer   # heart icons for the local player's lives
@@ -35,6 +40,7 @@ var _player_hud_vbox:  VBoxContainer
 var _player_rows: Dictionary = {}
 var _speaking_pids: Dictionary = {}  # pid → bool
 var _voice_btn:     Button = null    # mic mute/unmute toggle (multiplayer only)
+var _voice_icon:    TextureRect = null  # mic / mute icon shown on the button
 
 # ── Minimap ───────────────────────────────────────────────────────────────────
 var _mm_rect:    TextureRect
@@ -302,14 +308,16 @@ func _ensure_player_row(pid: int) -> void:
 	name_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	top_h.add_child(name_lbl)
 
-	# Speaking indicator — the 🔊 emoji isn't in the default font, so use a small
-	# "((•))" sound-wave glyph made of characters the font actually has.
-	var voice_lbl = Label.new()
-	voice_lbl.text = "((•))"
-	voice_lbl.add_theme_font_size_override("font_size", 11)
-	voice_lbl.add_theme_color_override("font_color", Color(0.45, 1.0, 0.55))
-	voice_lbl.visible = false
-	top_h.add_child(voice_lbl)
+	# Speaking indicator — a 🔊 speaker icon (SVG; the emoji glyph isn't in the
+	# default font), shown only while this peer is transmitting.
+	var voice_icon = TextureRect.new()
+	voice_icon.texture      = SPEAKER_TEX
+	voice_icon.custom_minimum_size = Vector2(15, 15)
+	voice_icon.expand_mode  = TextureRect.EXPAND_IGNORE_SIZE
+	voice_icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	voice_icon.modulate     = Color(0.45, 1.0, 0.55)
+	voice_icon.visible      = false
+	top_h.add_child(voice_icon)
 
 	# ── HP bar ────────────────────────────────────────────────────────────────
 	# Outer fixed-height control; inner fill uses anchors for percentage width.
@@ -349,7 +357,7 @@ func _ensure_player_row(pid: int) -> void:
 
 	_player_rows[pid] = {
 		"hp_fill":   hp_fill,
-		"voice_lbl": voice_lbl,
+		"voice_lbl": voice_icon,
 		"hp_lbl":    hp_lbl,
 		"lives_box": lives_box,
 		"kills_lbl": kills_lbl,
@@ -396,14 +404,14 @@ func _update_player_hud() -> void:
 			kills_lbl.text = "K:%d" % kills
 
 		# Voice icon
-		var voice_lbl: Label = row["voice_lbl"]
-		if is_instance_valid(voice_lbl):
-			voice_lbl.visible = _speaking_pids.get(pid, false)
+		var voice_icon: TextureRect = row["voice_lbl"]
+		if is_instance_valid(voice_icon):
+			voice_icon.visible = _speaking_pids.get(pid, false)
 
 func _on_player_speaking_changed(pid: int, speaking: bool) -> void:
 	_speaking_pids[pid] = speaking
 	# Brighten the local player's mic button while transmitting — an always-visible
-	# speaking indicator (the scoreboard ((•)) marker covers remote peers).
+	# speaking indicator (the scoreboard speaker icon covers remote peers).
 	if player != null and pid == player.peer_id and is_instance_valid(_voice_btn):
 		_voice_btn.modulate = Color(1.4, 1.4, 1.4) if speaking else Color(1, 1, 1)
 
@@ -787,9 +795,6 @@ func _build_voice_button() -> void:
 	const VSZ := 60.0
 	const VMG := 14.0
 	_voice_btn = Button.new()
-	_voice_btn.text = "MIC\nON"
-	_voice_btn.add_theme_font_size_override("font_size", 13)
-	_voice_btn.add_theme_color_override("font_color", Color.WHITE)
 	var vsb = StyleBoxFlat.new()
 	vsb.bg_color     = Color(0.20, 0.68, 0.36, 0.85)
 	vsb.border_color = Color(0.55, 1.0, 0.65, 0.90)
@@ -803,10 +808,23 @@ func _build_voice_button() -> void:
 	_voice_btn.offset_left  = VMG;        _voice_btn.offset_right  = VMG + VSZ
 	_voice_btn.offset_top   = -VSZ * 0.5; _voice_btn.offset_bottom = VSZ * 0.5
 	add_child(_voice_btn)
+
+	# Mic / mute icon centred on the button (swapped by VoiceManager on toggle).
+	_voice_icon = TextureRect.new()
+	_voice_icon.texture      = MIC_TEX
+	_voice_icon.expand_mode  = TextureRect.EXPAND_IGNORE_SIZE
+	_voice_icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	_voice_icon.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_voice_icon.offset_left = 15; _voice_icon.offset_top    = 15
+	_voice_icon.offset_right = -15; _voice_icon.offset_bottom = -15
+	_voice_icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_voice_btn.add_child(_voice_icon)
+
 	_voice_btn.pressed.connect(func():
 		if vm._transmitting: vm.mute()
 		else:                vm.unmute())
-	vm.voice_button = _voice_btn
+	vm.voice_button      = _voice_btn
+	vm.voice_button_icon = _voice_icon
 
 # Transparent hit-area panel with a SVG image button. No background — icon
 # floats directly on the HUD like a standard game action button.
