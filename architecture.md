@@ -115,8 +115,8 @@ UI (`ui_manager.gd`): mic mute/unmute button + per-speaker speaking icon
 
 | Transport | Status | Plane | Pros / cons |
 |-----------|--------|-------|-------------|
-| **WebSocket relay** | **Active / default** | rides the gameplay TCP/wss channel | Simple, no extra infra; but TCP head-of-line blocking causes jitter (masked by the jitter buffer). |
-| **WebRTC DataChannel** | **Optional, `const USE_WEBRTC` (default false)** — code in **PR #20** (client) + **trapbattle-server PR #1** | separate unreliable/unordered UDP DataChannel | No TCP HOL blocking; STAR relay through the server (not P2P mesh, no IP exposure). |
+| **WebSocket relay** | **Fallback** | rides the gameplay TCP/wss channel | Simple, no extra infra; but TCP head-of-line blocking causes jitter (masked by the jitter buffer). |
+| **WebRTC DataChannel** | **Enabled (`const USE_WEBRTC = true`)** — implemented on both client (`voice_manager.gd`) and server (`voice_relay.gd`). **Activation also requires the `webrtc-native` GDExtension on the deployed server** (below). | separate unreliable/unordered UDP DataChannel | No TCP HOL blocking; STAR relay through the server (not P2P mesh, no IP exposure). |
 
 **WebRTC path details (when enabled):**
 - Topology: **star** — each client ↔ server DataChannel; server forwards each

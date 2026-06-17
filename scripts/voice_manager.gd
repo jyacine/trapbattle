@@ -50,7 +50,7 @@ const JITTER_MAX     := 0.40    # cap queued audio; drop oldest beyond this (bou
 # voice automatically falls back to the WebSocket relay, so flipping this on without
 # a WebRTC-capable server simply keeps using WebSocket. The web client has WebRTC
 # built in (browser), so no client-side addon is needed.
-const USE_WEBRTC   := false
+const USE_WEBRTC   := true
 const RTC_STUN     := "stun:stun.l.google.com:19302"
 const RTC_CH_ID    := 1          # negotiated DataChannel id — MUST match the server
 
