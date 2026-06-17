@@ -58,13 +58,16 @@ func _on_start_game(seed_val: int, is_mp: bool) -> void:
 		box.name = "TrapBox_%d" % i
 
 	_create_lighting()
-	_create_ui()
 
-	# Voice chat — only in multiplayer
+	# Voice chat — only in multiplayer. Must exist BEFORE _create_ui(): UIManager's
+	# _ready() looks up "VoiceManager" to build the mic button and wire the speaking
+	# indicator, so creating it afterwards left both silently disabled.
 	if is_mp:
 		voice_manager = VoiceManager.new()
 		voice_manager.name = "VoiceManager"
 		add_child(voice_manager)
+
+	_create_ui()
 
 # ── Single-player: human Player + Robot AI ────────────────────────────────────
 func _spawn_sp_players() -> void:
