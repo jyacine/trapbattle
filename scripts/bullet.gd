@@ -8,6 +8,7 @@ var max_range:    float   = 28.0
 var local_only:   bool    = false   # true = visual only, no hit detection
 var owner_peer_id: int    = 0       # peer_id of the player who fired
 var owner_index:  int     = 0       # player_index for color
+var damage:       int     = 3       # damage dealt on hit
 var game_manager: GameManager
 var sound_manager: SoundManager
 
@@ -66,9 +67,9 @@ func _process(delta: float) -> void:
 		if dx * dx + dz * dz < HIT_RADIUS * HIT_RADIUS \
 				and y_rel > BODY_MIN_Y and y_rel < BODY_MAX_Y:
 			if multiplayer.has_multiplayer_peer():
-				game_manager.net_damage.rpc(target_pid, Config.HIT_DAMAGE, owner_peer_id)
+				game_manager.net_damage.rpc(target_pid, damage, owner_peer_id)
 			else:
-				game_manager.damage_player(target_pid, Config.HIT_DAMAGE, owner_peer_id)
+				game_manager.damage_player(target_pid, damage, owner_peer_id)
 			if sound_manager: sound_manager.play_gun_hit()
 			queue_free()
 			return

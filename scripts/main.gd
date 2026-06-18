@@ -57,6 +57,13 @@ func _on_start_game(seed_val: int, is_mp: bool) -> void:
 		add_child(box)
 		box.name = "TrapBox_%d" % i
 
+	# Spawn gun boxes (3 per map)
+	for i in 3:
+		var gun_box = GunBox.new()
+		gun_box.current_grid_pos = game_manager.get_random_floor_cell()
+		add_child(gun_box)
+		gun_box.name = "GunBox_%d" % i
+
 	_create_lighting()
 
 	# Voice chat — only in multiplayer. Must exist BEFORE _create_ui(): UIManager's

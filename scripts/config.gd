@@ -111,3 +111,34 @@ const TRAP_COLORS: Dictionary = {
 	13: Color(0.8, 0.1, 0.8),   # Turret     – magenta
 	14: Color(0.0, 0.9, 0.9),   # Mirror     – cyan
 }
+
+# ── Gun types enum ──────────────────────────────────────────────────────────
+enum GunType {
+	PISTOL     = 0,   # 3 HP damage, unlimited ammo
+	SHOTGUN    = 1,   # 15 HP damage, 5 shots max
+	MACHINEGUN = 2,   # 1 HP damage, 50 shots max
+}
+
+const GUN_NAMES: Dictionary = {
+	0: "Pistol",
+	1: "Shotgun",
+	2: "Machinegun",
+}
+
+const GUN_DAMAGE: Dictionary = {
+	0: 3,
+	1: 15,
+	2: 1,
+}
+
+const GUN_AMMO_MAX: Dictionary = {
+	0: -1,  # unlimited
+	1: 5,
+	2: 50,
+}
+
+const GUN_COOLDOWN: Dictionary = {
+	0: 0.3,   # pistol: 200 RPM
+	1: 1.0,   # shotgun: 60 RPM
+	2: 0.08,  # machinegun: 750 RPM
+}

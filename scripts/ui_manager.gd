@@ -497,12 +497,18 @@ func _update_hud() -> void:
 		if _trap_nd != null:
 			_trap_nd.modulate = Color(1, 1, 1, 0.40)
 
-	if player._gun_cooldown > 0.0:
-		_gun_label.text = "Gun: %.1fs" % player._gun_cooldown
-		_gun_label.add_theme_color_override("font_color", Color(0.8, 0.5, 0.2))
+	if player.gun_type >= 0:
+		var gun_name = Config.GUN_NAMES[player.gun_type]
+		var ammo_str = str(player.gun_ammo) if player.gun_ammo >= 0 else "~"
+		if player._gun_cooldown > 0.0:
+			_gun_label.text = "Gun: [%s %s] %.1fs" % [gun_name, ammo_str, player._gun_cooldown]
+			_gun_label.add_theme_color_override("font_color", Color(0.8, 0.5, 0.2))
+		else:
+			_gun_label.text = "Gun: [%s %s]  READY  (LMB/TAB)" % [gun_name, ammo_str]
+			_gun_label.add_theme_color_override("font_color", Color(0.3, 1.0, 0.3))
 	else:
-		_gun_label.text = "Gun: READY  (LMB / TAB)"
-		_gun_label.add_theme_color_override("font_color", Color(0.3, 1.0, 0.3))
+		_gun_label.text = "No gun  (walk over a blue glowing box)"
+		_gun_label.add_theme_color_override("font_color", Color.GRAY)
 
 	var fx_text = ""
 	for eff in game_manager.effects.get(pid, {}).keys():
@@ -876,99 +882,165 @@ func _set_hearts(box: HBoxContainer, count: int, px: float) -> void:
 		box.add_child(tr)
 
 # ── Inventory bar (bottom centre, always visible) ────────────────────────────
+var _trap_btn: Button = null
+var _trap_menu: PanelContainer = null
+var _gun_btn: Button = null
+var _gun_menu: PanelContainer = null
+
 func _build_inventory_bar() -> void:
 	if player == null: return
 
-	const SZ    := 72.0   # slot size
-	const GAP   := 8.0    # gap between slots
-	const MG    := 30.0   # bottom margin (above hint label)
-	const TOTAL := SZ * 3 + GAP * 2   # 232 px
+	const BTN_SIZE := 90.0
+	const GAP := 16.0
+	const MG := 30.0   # bottom margin (above hint label)
+	const TOTAL := BTN_SIZE * 2 + GAP
 
 	_inv_bar = Control.new()
 	_inv_bar.anchor_left   = 0.5; _inv_bar.anchor_right  = 0.5
 	_inv_bar.anchor_top    = 1.0; _inv_bar.anchor_bottom = 1.0
 	_inv_bar.offset_left   = -TOTAL * 0.5
 	_inv_bar.offset_right  =  TOTAL * 0.5
-	_inv_bar.offset_top    = -(SZ + MG)
+	_inv_bar.offset_top    = -(BTN_SIZE + MG)
 	_inv_bar.offset_bottom = -MG
 	add_child(_inv_bar)
 
-	_inv_slots.clear()
+	_trap_btn = Button.new()
+	_trap_btn.text = "Traps"
+	_trap_btn.position = Vector2(0, 0)
+	_trap_btn.size = Vector2(BTN_SIZE, BTN_SIZE)
+	_trap_btn.pressed.connect(_on_trap_btn_pressed)
+	_build_button_style(_trap_btn)
+	_inv_bar.add_child(_trap_btn)
+
+	_gun_btn = Button.new()
+	_gun_btn.text = "Gun"
+	_gun_btn.position = Vector2(BTN_SIZE + GAP, 0)
+	_gun_btn.size = Vector2(BTN_SIZE, BTN_SIZE)
+	_gun_btn.pressed.connect(_on_gun_btn_pressed)
+	_build_button_style(_gun_btn)
+	_inv_bar.add_child(_gun_btn)
+
+func _build_button_style(btn: Button) -> void:
+	btn.flat = false
+	var sb = StyleBoxFlat.new()
+	sb.bg_color = Color(0.05, 0.05, 0.10, 0.80)
+	sb.border_color = Color(0.4, 0.4, 0.4, 0.80)
+	sb.set_border_width_all(2)
+	sb.set_corner_radius_all(6)
+	btn.add_theme_stylebox_override("normal", sb)
+	btn.add_theme_stylebox_override("hover", sb)
+	btn.add_theme_stylebox_override("pressed", sb)
+	btn.add_theme_stylebox_override("focus", StyleBoxEmpty.new())
+	btn.add_theme_font_size_override("font_size", 16)
+
+func _on_trap_btn_pressed() -> void:
+	if _trap_menu != null:
+		_trap_menu.queue_free()
+		_trap_menu = null
+		return
+	_show_trap_menu()
+
+func _on_gun_btn_pressed() -> void:
+	if _gun_menu != null:
+		_gun_menu.queue_free()
+		_gun_menu = null
+		return
+	_show_gun_menu()
+
+func _show_trap_menu() -> void:
+	_trap_menu = PanelContainer.new()
+	var sb = StyleBoxFlat.new()
+	sb.bg_color = Color(0.0, 0.0, 0.0, 0.90)
+	sb.set_border_width_all(2)
+	sb.border_color = Color(0.6, 0.6, 0.6, 1.0)
+	sb.set_corner_radius_all(6)
+	_trap_menu.add_theme_stylebox_override("panel", sb)
+	_trap_menu.anchor_left = 0.5
+	_trap_menu.anchor_right = 0.5
+	_trap_menu.anchor_bottom = 1.0
+	_trap_menu.offset_left = -80
+	_trap_menu.offset_right = 80
+	_trap_menu.offset_bottom = -(90 + 30 + 10)
+	add_child(_trap_menu)
+
+	var vbox = VBoxContainer.new()
+	vbox.add_theme_constant_override("separation", 4)
+	_trap_menu.add_child(vbox)
+
 	for i in 3:
+		if player.trap_inventory[i] >= 0:
+			var trap_type = player.trap_inventory[i]
+			var trap_name = Config.TRAP_NAMES[trap_type]
+			var trap_col = Config.TRAP_COLORS[trap_type]
+			var btn = Button.new()
+			btn.text = trap_name
+			btn.modulate = trap_col
+			var slot_idx = i
+			btn.pressed.connect(func():
+				player.active_trap_slot = slot_idx
+				if _trap_menu: _trap_menu.queue_free()
+				_trap_menu = null
+			)
+			btn.add_theme_font_size_override("font_size", 14)
+			var btn_sb = StyleBoxFlat.new()
+			btn_sb.bg_color = Color(0.1, 0.1, 0.1, 0.8)
+			btn_sb.set_corner_radius_all(4)
+			btn.add_theme_stylebox_override("normal", btn_sb)
+			btn.add_theme_stylebox_override("hover", btn_sb)
+			btn.add_theme_stylebox_override("pressed", btn_sb)
+			vbox.add_child(btn)
+
+func _show_gun_menu() -> void:
+	_gun_menu = PanelContainer.new()
+	var sb = StyleBoxFlat.new()
+	sb.bg_color = Color(0.0, 0.0, 0.0, 0.90)
+	sb.set_border_width_all(2)
+	sb.border_color = Color(0.6, 0.6, 0.6, 1.0)
+	sb.set_corner_radius_all(6)
+	_gun_menu.add_theme_stylebox_override("panel", sb)
+	_gun_menu.anchor_left = 0.5
+	_gun_menu.anchor_right = 0.5
+	_gun_menu.anchor_bottom = 1.0
+	_gun_menu.offset_left = 0
+	_gun_menu.offset_right = 160
+	_gun_menu.offset_bottom = -(90 + 30 + 10)
+	add_child(_gun_menu)
+
+	var vbox = VBoxContainer.new()
+	vbox.add_theme_constant_override("separation", 4)
+	_gun_menu.add_child(vbox)
+
+	if player.gun_type >= 0:
+		var gun_type = player.gun_type
+		var gun_name = Config.GUN_NAMES[gun_type]
+		var ammo_text = str(player.gun_ammo) if player.gun_ammo >= 0 else "~"
 		var btn = Button.new()
-		btn.position = Vector2(i * (SZ + GAP), 0)
-		btn.size     = Vector2(SZ, SZ)
-		btn.flat     = true
-
-		var sb = StyleBoxFlat.new()
-		sb.bg_color = Color(0.05, 0.05, 0.10, 0.80)
-		sb.border_color = Color(0.4, 0.4, 0.4, 0.80)
-		sb.set_border_width_all(2)
-		sb.set_corner_radius_all(6)
-		btn.add_theme_stylebox_override("normal",  sb)
-		btn.add_theme_stylebox_override("hover",   sb)
-		btn.add_theme_stylebox_override("pressed", sb)
-		btn.add_theme_stylebox_override("focus",   StyleBoxEmpty.new())
-
-		var num_lbl = Label.new()
-		num_lbl.text = str(i + 1)
-		num_lbl.add_theme_font_size_override("font_size", 10)
-		num_lbl.add_theme_color_override("font_color", Color(0.55, 0.55, 0.55))
-		num_lbl.position = Vector2(4, 2)
-		num_lbl.size     = Vector2(20, 16)
-		num_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		btn.add_child(num_lbl)
-
+		btn.text = "%s (%s)" % [gun_name, ammo_text]
+		btn.modulate = Color(0.5, 0.8, 1.0)
+		btn.add_theme_font_size_override("font_size", 14)
+		var btn_sb = StyleBoxFlat.new()
+		btn_sb.bg_color = Color(0.1, 0.1, 0.15, 0.8)
+		btn_sb.set_corner_radius_all(4)
+		btn.add_theme_stylebox_override("normal", btn_sb)
+		btn.add_theme_stylebox_override("hover", btn_sb)
+		btn.add_theme_stylebox_override("pressed", btn_sb)
+		vbox.add_child(btn)
+	else:
 		var lbl = Label.new()
-		lbl.text = "-"
-		lbl.add_theme_font_size_override("font_size", 11)
-		lbl.add_theme_color_override("font_color", Color.GRAY)
-		lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		lbl.vertical_alignment   = VERTICAL_ALIGNMENT_CENTER
-		lbl.set_anchors_preset(Control.PRESET_FULL_RECT)
-		lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		btn.add_child(lbl)
-
-		var slot_idx := i
-		btn.pressed.connect(func(): player.active_trap_slot = slot_idx)
-
-		_inv_bar.add_child(btn)
-		_inv_slots.append({ "sb": sb, "lbl": lbl })
+		lbl.text = "No gun"
+		lbl.modulate = Color.GRAY
+		lbl.add_theme_font_size_override("font_size", 14)
+		vbox.add_child(lbl)
 
 func _update_inventory_bar() -> void:
-	if _inv_bar == null or player == null: return
-
-	for i in 3:
-		var slot   = _inv_slots[i]
-		var sb: StyleBoxFlat = slot["sb"]
-		var lbl: Label       = slot["lbl"]
-		var trap_type: int   = player.trap_inventory[i]
-		var is_active: bool  = (i == player.active_trap_slot)
-
-		if trap_type >= 0:
-			var col: Color = Config.TRAP_COLORS[trap_type]
-			lbl.text = Config.TRAP_NAMES[trap_type]
-			if is_active:
-				lbl.add_theme_color_override("font_color", col.lightened(0.25))
-				sb.border_color = Color(1.0, 0.95, 0.25, 1.0)
-				sb.set_border_width_all(3)
-				sb.bg_color = Color(col.r * 0.28, col.g * 0.28, col.b * 0.28, 0.92)
-			else:
-				lbl.add_theme_color_override("font_color", col.darkened(0.25))
-				sb.border_color = Color(0.45, 0.45, 0.45, 0.80)
-				sb.set_border_width_all(2)
-				sb.bg_color = Color(0.05, 0.05, 0.10, 0.80)
-		else:
-			lbl.text = "-"
-			lbl.add_theme_color_override("font_color", Color(0.38, 0.38, 0.38))
-			if is_active:
-				sb.border_color = Color(0.65, 0.65, 0.65, 0.90)
-				sb.set_border_width_all(3)
-				sb.bg_color = Color(0.10, 0.10, 0.15, 0.85)
-			else:
-				sb.border_color = Color(0.32, 0.32, 0.32, 0.70)
-				sb.set_border_width_all(2)
-				sb.bg_color = Color(0.05, 0.05, 0.10, 0.80)
+	if _trap_btn == null or player == null:
+		return
+	if _trap_menu and not game_manager.is_playing:
+		_trap_menu.queue_free()
+		_trap_menu = null
+	if _gun_menu and not game_manager.is_playing:
+		_gun_menu.queue_free()
+		_gun_menu = null
 
 func _circle_panel(size: float, fill: Color, border: Color, bw: int) -> Panel:
 	var p = Panel.new()

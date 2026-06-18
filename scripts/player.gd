@@ -44,10 +44,11 @@ var held_trap: int:                   # read alias used by UI / place code
 	get: return trap_inventory[active_trap_slot]
 var _pickup_cooldown: float = 0.0
 
-# ── Gun ───────────────────────────────────────────────────────────────────────
+# ── Gun system ────────────────────────────────────────────────────────────────
 var _gun_cooldown: float = 0.0
+var gun_type: int = -1   # -1 = no gun, 0 = pistol, 1 = shotgun, 2 = machinegun
+var gun_ammo: int = 0    # current ammo; -1 = unlimited
 const GUN_RANGE    := 28.0
-const GUN_COOLDOWN := 1.5
 
 # ── Blind overlay ────────────────────────────────────────────────────────────
 var _blind_overlay: ColorRect
@@ -278,9 +279,14 @@ func _cycle_slot(dir: int) -> void:
 
 # ── Gun ───────────────────────────────────────────────────────────────────────
 func _fire_gun() -> void:
-	if _gun_cooldown > 0.0 or not game_manager.is_playing:
+	if gun_type < 0 or _gun_cooldown > 0.0 or not game_manager.is_playing:
 		return
-	_gun_cooldown = GUN_COOLDOWN
+	# Check ammo
+	if gun_ammo == 0:
+		return
+
+	var cooldown = Config.GUN_COOLDOWN[gun_type]
+	_gun_cooldown = cooldown
 	_vm_recoil    = 1.0
 	if sound_manager: sound_manager.play_gun_fire()
 
@@ -300,7 +306,13 @@ func _fire_gun() -> void:
 	_spawn_bullet_local(spawn_pos, forward)
 
 	if multiplayer.has_multiplayer_peer():
-		game_manager.net_spawn_bullet.rpc(spawn_pos, forward, peer_id, player_index)
+		game_manager.net_spawn_bullet.rpc(spawn_pos, forward, peer_id, player_index, gun_type)
+
+	# Consume ammo (unlimited ammo stays at -1)
+	if gun_ammo > 0:
+		gun_ammo -= 1
+		if gun_ammo == 0:
+			gun_type = -1   # gun is empty, drop it
 
 func _spawn_bullet_local(pos: Vector3, dir: Vector3) -> void:
 	var b = Bullet.new()
@@ -311,6 +323,7 @@ func _spawn_bullet_local(pos: Vector3, dir: Vector3) -> void:
 	b.game_manager  = game_manager
 	b.sound_manager = sound_manager
 	b.position      = pos
+	b.damage        = Config.GUN_DAMAGE[gun_type]
 	get_parent().add_child(b)
 
 # ── Trap placement ────────────────────────────────────────────────────────────
@@ -338,12 +351,30 @@ func _try_place() -> void:
 func _try_pickup() -> void:
 	if _pickup_cooldown > 0.0 or trap_manager == null:
 		return
-	# Find first empty slot — if all 3 are full, don't pick up
+	var pickup_dist = Config.CELL_SIZE * 0.75
+
+	# Try to pick up gun first (prioritize guns)
+	var best_gun_box = null
+	var best_gun_dist = pickup_dist
+	for box in get_tree().get_nodes_in_group("gun_boxes"):
+		var d = position.distance_to(box.position)
+		if d < best_gun_dist: best_gun_dist = d; best_gun_box = box
+
+	if best_gun_box != null:
+		gun_type = best_gun_box.gun_type
+		gun_ammo = Config.GUN_AMMO_MAX[gun_type]
+		best_gun_box.respawn_box()
+		_pickup_cooldown = 0.5
+		if sound_manager: sound_manager.play_pickup()
+		return
+
+	# Try to pick up trap (if no gun nearby)
 	var slot := -1
 	for i in 3:
 		if trap_inventory[i] < 0: slot = i; break
 	if slot < 0: return
-	var best_box = null; var best_dist = Config.CELL_SIZE * 0.75
+	var best_box = null
+	var best_dist = pickup_dist
 	for box in get_tree().get_nodes_in_group("trap_boxes"):
 		var d = position.distance_to(box.position)
 		if d < best_dist: best_dist = d; best_box = box
