@@ -64,6 +64,15 @@ const GUN_RANGE := 28.0
 # ── Blind overlay ────────────────────────────────────────────────────────────
 var _blind_overlay: ColorRect
 
+# ── Death / respawn animation ─────────────────────────────────────────────────
+var _death_overlay:    ColorRect = null
+var _prev_respawning:  bool      = false
+var _respawn_drop_t:   float     = -1.0   # -1 = inactive; 0..1 = falling
+var _respawn_y_from:   float     = 0.0
+var _respawn_y_to:     float     = 0.0
+const RESPAWN_DROP_HEIGHT    := 9.0
+const RESPAWN_DROP_DURATION  := 1.4
+
 # ── Current grid pos ─────────────────────────────────────────────────────────
 var current_grid_pos: Array = [0, 0]
 
@@ -132,6 +141,16 @@ func _ready() -> void:
 		_build_viewmodel()
 		_build_debug_overlay()
 		_teleport_to(spawn_cell)
+		# Full-screen death fade overlay (above all gameplay layers)
+		var death_layer := CanvasLayer.new()
+		death_layer.layer = 110
+		add_child(death_layer)
+		_death_overlay = ColorRect.new()
+		_death_overlay.set_anchors_preset(Control.PRESET_FULL_RECT)
+		_death_overlay.color = Color(0, 0, 0, 0)
+		_death_overlay.visible = false
+		_death_overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		death_layer.add_child(_death_overlay)
 		if not OS.has_feature("web"):
 			Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 	else:
@@ -163,8 +182,27 @@ func _physics_process(delta: float) -> void:
 	if absf(_pending_yaw_delta) < 0.0001:
 		_pending_yaw_delta = 0.0   # snap-drain the tail to avoid lingering drift
 
-	if game_manager.respawning.get(peer_id, false):
+	# ── Respawn state machine ────────────────────────────────────────────────
+	var is_respawning: bool = game_manager.respawning.get(peer_id, false)
+	if is_respawning and not _prev_respawning:
+		# Just died: teleport to spawn, fade to black
 		_teleport_to(game_manager.get_spawn_for_index(player_index))
+		if _death_overlay:
+			_death_overlay.visible = true
+			create_tween().tween_property(_death_overlay, "color", Color(0, 0, 0, 1.0), 0.5)
+	elif not is_respawning and _prev_respawning:
+		# Just respawned: teleport, then drop from high above
+		_teleport_to(game_manager.get_spawn_for_index(player_index))
+		_respawn_y_to   = position.y
+		_respawn_y_from = position.y + RESPAWN_DROP_HEIGHT
+		position.y      = _respawn_y_from
+		_respawn_drop_t = 0.0
+		if _death_overlay:
+			var tw := create_tween()
+			tw.tween_property(_death_overlay, "color", Color(0, 0, 0, 0), 0.8)
+			tw.tween_callback(func(): _death_overlay.visible = false)
+	_prev_respawning = is_respawning
+	if is_respawning:
 		return
 
 	var is_confused = game_manager.has_effect(peer_id, "confusion")
@@ -220,6 +258,14 @@ func _physics_process(delta: float) -> void:
 				_footstep_timer = FOOTSTEP_INTERVAL / speed_mult
 		else:
 			_footstep_timer = 0.0   # reset so first step after pause is immediate
+
+	# ── Respawn drop-in animation ─────────────────────────────────────────────
+	if _respawn_drop_t >= 0.0:
+		_respawn_drop_t = minf(_respawn_drop_t + delta / RESPAWN_DROP_DURATION, 1.0)
+		var t2: float = _respawn_drop_t * _respawn_drop_t   # ease-in (accelerating fall)
+		position.y = lerpf(_respawn_y_from, _respawn_y_to, t2)
+		if _respawn_drop_t >= 1.0:
+			_respawn_drop_t = -1.0
 
 	current_grid_pos = game_manager.world_to_grid(position)
 	_try_pickup()

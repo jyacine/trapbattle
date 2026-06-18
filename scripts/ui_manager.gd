@@ -80,8 +80,9 @@ var _joy_origin:  Vector2 = Vector2.ZERO
 var _joy_base_nd: Panel   = null
 var _joy_knob_nd: Panel   = null
 
-var _look_id:     int     = -1
-var _look_prev:   Vector2 = Vector2.ZERO
+var _look_id:          int     = -1
+var _look_prev:        Vector2 = Vector2.ZERO
+var _look_prev_fire:   Vector2 = Vector2.ZERO   # track fire-drag position for turn-while-firing
 
 var _fire_nd:       Panel = null
 var _trap_nd:       Panel = null
@@ -893,11 +894,12 @@ func _set_hearts(box: HBoxContainer, count: int, px: float) -> void:
 		box.add_child(tr)
 
 # ── Inventory bar (bottom centre, always visible) ────────────────────────────
-var _select_btn:    Button      = null
-var _active_icon:   TextureRect = null   # gun icon shown above Select
-var _active_label:  Label       = null   # trap name shown above Select (when no gun)
-var _weapon_wheel:  WeaponWheel = null
-var _wheel_open_by_key: bool    = false
+var _select_btn:      Button      = null
+var _active_icon:     TextureRect = null   # gun icon (right half of preview)
+var _active_label:    Label       = null   # trap name (left half of preview)
+var _active_trap_dot: ColorRect   = null   # trap colour dot (left half)
+var _weapon_wheel:    WeaponWheel = null
+var _wheel_open_by_key: bool      = false
 
 func _build_inventory_bar() -> void:
 	if player == null: return
@@ -922,36 +924,65 @@ func _build_inventory_bar() -> void:
 	_build_button_style(_select_btn)
 	_inv_bar.add_child(_select_btn)
 
-	# Active-item indicator: gun icon or trap name shown just above the button
+	# Active-item preview above button: left = trap, right = gun
 	const PREVIEW_H := 52.0
-	var preview_panel := PanelContainer.new()
+	const HALF      := BTN_SIZE * 0.5
+	var preview_panel := Control.new()
 	preview_panel.position = Vector2(0, -(PREVIEW_H + 6))
 	preview_panel.size     = Vector2(BTN_SIZE, PREVIEW_H)
+	preview_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_inv_bar.add_child(preview_panel)
+
+	# Background panel
+	var pp_bg := PanelContainer.new()
+	pp_bg.set_anchors_preset(Control.PRESET_FULL_RECT)
+	pp_bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	var pp_sb := StyleBoxFlat.new()
 	pp_sb.bg_color = Color(0.04, 0.04, 0.08, 0.78)
 	pp_sb.set_border_width_all(1); pp_sb.border_color = Color(0.35, 0.35, 0.4, 0.6)
 	pp_sb.set_corner_radius_all(6)
-	preview_panel.add_theme_stylebox_override("panel", pp_sb)
-	_inv_bar.add_child(preview_panel)
+	pp_bg.add_theme_stylebox_override("panel", pp_sb)
+	preview_panel.add_child(pp_bg)
 
-	_active_icon = TextureRect.new()
-	_active_icon.expand_mode  = TextureRect.EXPAND_FIT_WIDTH_PROPORTIONAL
-	_active_icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-	_active_icon.set_anchors_preset(Control.PRESET_FULL_RECT)
-	_active_icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	preview_panel.add_child(_active_icon)
+	# Vertical divider between trap (left) and gun (right)
+	var divider := ColorRect.new()
+	divider.color = Color(0.45, 0.45, 0.55, 0.45)
+	divider.position = Vector2(HALF - 1, 5)
+	divider.size = Vector2(2, PREVIEW_H - 10)
+	divider.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	preview_panel.add_child(divider)
+
+	# Trap section – left half: coloured dot + name
+	_active_trap_dot = ColorRect.new()
+	_active_trap_dot.size = Vector2(10, 10)
+	_active_trap_dot.position = Vector2(6, 8)
+	_active_trap_dot.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_active_trap_dot.visible = false
+	preview_panel.add_child(_active_trap_dot)
 
 	_active_label = Label.new()
+	_active_label.position = Vector2(2, 20)
+	_active_label.size = Vector2(HALF - 4, PREVIEW_H - 22)
 	_active_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_active_label.vertical_alignment   = VERTICAL_ALIGNMENT_CENTER
 	_active_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_active_label.set_anchors_preset(Control.PRESET_FULL_RECT)
-	_active_label.add_theme_font_size_override("font_size", 12)
+	_active_label.add_theme_font_size_override("font_size", 11)
 	_active_label.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.8))
 	_active_label.add_theme_constant_override("shadow_offset_x", 1)
 	_active_label.add_theme_constant_override("shadow_offset_y", 1)
 	_active_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_active_label.visible = false
 	preview_panel.add_child(_active_label)
+
+	# Gun section – right half: gun icon
+	_active_icon = TextureRect.new()
+	_active_icon.expand_mode  = TextureRect.EXPAND_FIT_WIDTH_PROPORTIONAL
+	_active_icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	_active_icon.position = Vector2(HALF + 2, 4)
+	_active_icon.size = Vector2(HALF - 6, PREVIEW_H - 8)
+	_active_icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_active_icon.visible = false
+	preview_panel.add_child(_active_icon)
 
 	# Weapon wheel overlay
 	_weapon_wheel = WeaponWheel.new()
@@ -993,22 +1024,27 @@ func _update_inventory_bar() -> void:
 	if _weapon_wheel != null and _weapon_wheel.visible and not game_manager.is_playing:
 		_weapon_wheel.close(false)
 
-	# Active-item preview above Select button
-	if _active_icon != null and _active_label != null:
+	# Active-item preview: gun (right) and trap (left) shown simultaneously
+	if _active_icon != null and _active_label != null and _active_trap_dot != null:
 		var gtype: int = player.gun_type
 		var htrap: int = player.held_trap
+		# Gun side (right half)
 		if gtype >= 0 and gtype < GUN_ICONS.size():
 			_active_icon.texture = load(GUN_ICONS[gtype])
 			_active_icon.visible = true
-			_active_label.visible = false
-		elif htrap >= 0:
+		else:
+			_active_icon.texture = null
 			_active_icon.visible = false
+		# Trap side (left half)
+		if htrap >= 0:
+			var tcol: Color = Config.TRAP_COLORS.get(htrap, Color.WHITE)
+			_active_trap_dot.color = tcol
+			_active_trap_dot.visible = true
 			_active_label.text = Config.TRAP_NAMES.get(htrap, "?")
-			_active_label.add_theme_color_override("font_color",
-				Config.TRAP_COLORS.get(htrap, Color.WHITE))
+			_active_label.add_theme_color_override("font_color", tcol.lightened(0.4))
 			_active_label.visible = true
 		else:
-			_active_icon.visible  = false
+			_active_trap_dot.visible = false
 			_active_label.visible = false
 
 	# Keep switch-gun touch button icon in sync with equipped gun
@@ -1138,6 +1174,7 @@ func _input(event: InputEvent) -> void:
 			if pos.x >= vp_hw:
 				if _fire_nd != null and _fire_nd.get_global_rect().has_point(pos) and _fire_id == -1:
 					_fire_id = event.index
+					_look_prev_fire = pos   # seed drag tracking for turn-while-firing
 					_fire_nd.modulate = Color(1.5, 1.5, 1.5)
 					player._fire_gun()
 					get_viewport().set_input_as_handled()
@@ -1201,6 +1238,17 @@ func _input(event: InputEvent) -> void:
 			var dx := clampf(drag.position.x - _look_prev.x, -60.0, 60.0)
 			var dy := clampf(drag.position.y - _look_prev.y, -60.0, 60.0)
 			_look_prev = drag.position
+			player._pending_yaw_delta -= dx * sens
+			player.pitch = clamp(player.pitch - dy * sens, -PI / 3.0, PI / 3.0)
+			if player.camera_node:
+				player.camera_node.rotation.x = player.pitch
+			get_viewport().set_input_as_handled()
+		elif event.index == _fire_id:
+			# Dragging while holding fire button turns the camera (fire-to-turn)
+			var sens: float = player.mouse_sensitivity * 2.6
+			var dx := clampf(drag.position.x - _look_prev_fire.x, -60.0, 60.0)
+			var dy := clampf(drag.position.y - _look_prev_fire.y, -60.0, 60.0)
+			_look_prev_fire = drag.position
 			player._pending_yaw_delta -= dx * sens
 			player.pitch = clamp(player.pitch - dy * sens, -PI / 3.0, PI / 3.0)
 			if player.camera_node:
