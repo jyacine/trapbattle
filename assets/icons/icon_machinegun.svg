@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!-- Receiver (boxy) -->
+  <rect x="14" y="22" width="24" height="16" rx="2" fill="white"/>
+  <!-- Long barrel -->
+  <rect x="36" y="27" width="26" height="6" rx="1" fill="white"/>
+  <!-- Muzzle brake notch -->
+  <rect x="58" y="25" width="4" height="10" rx="1" fill="white"/>
+  <!-- Box magazine (hangs below) -->
+  <rect x="20" y="38" width="10" height="14" rx="2" fill="white"/>
+  <!-- Carry handle / sight rail on top -->
+  <rect x="16" y="18" width="20" height="5" rx="1" fill="white"/>
+  <!-- Grip -->
+  <rect x="10" y="32" width="7" height="12" rx="2" fill="white"/>
+  <!-- Trigger guard -->
+  <rect x="12" y="38" width="10" height="4" rx="2" fill="white"/>
+</svg>

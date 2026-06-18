@@ -313,6 +313,7 @@ func _fire_gun() -> void:
 		gun_ammo -= 1
 		if gun_ammo == 0:
 			gun_type = -1   # gun is empty, drop it
+			_rebuild_viewmodel()
 
 func _spawn_bullet_local(pos: Vector3, dir: Vector3) -> void:
 	var b = Bullet.new()
@@ -364,6 +365,7 @@ func _try_pickup() -> void:
 		gun_type = best_gun_box.gun_type
 		gun_ammo = Config.GUN_AMMO_MAX[gun_type]
 		best_gun_box.respawn_box()
+		_rebuild_viewmodel()
 		_pickup_cooldown = 0.5
 		if sound_manager: sound_manager.play_pickup()
 		return
@@ -487,51 +489,101 @@ func set_blind_overlay(overlay: ColorRect) -> void:
 # ── Viewmodel ─────────────────────────────────────────────────────────────────
 func _build_viewmodel() -> void:
 	_viewmodel_root = Node3D.new()
-	# Held low and to the right, pointing forward — matches the FPS reference shot.
-	_viewmodel_root.position        = Vector3(0.20, -0.26, -0.42)
+	_viewmodel_root.position         = Vector3(0.20, -0.26, -0.42)
 	_viewmodel_root.rotation_degrees = Vector3(-4.0, -6.0, 0.0)
+	_viewmodel_root.visible          = false   # hidden until a gun is picked up
 	camera_node.add_child(_viewmodel_root)
 
-	# ── Materials ──────────────────────────────────────────────────────────────
-	# White "Handcannon" body
+func _rebuild_viewmodel() -> void:
+	if _viewmodel_root == null: return
+	for c in _viewmodel_root.get_children():
+		c.queue_free()
+	_viewmodel_root.visible = (gun_type >= 0)
+	if   gun_type == Config.GunType.PISTOL:     _build_vm_pistol()
+	elif gun_type == Config.GunType.SHOTGUN:    _build_vm_shotgun()
+	elif gun_type == Config.GunType.MACHINEGUN: _build_vm_machinegun()
+
+func _build_vm_pistol() -> void:
 	var white = StandardMaterial3D.new()
-	white.albedo_color = Color(0.93, 0.93, 0.95)
-	white.metallic = 0.30; white.roughness = 0.35
-
-	# Black slide / barrel / details
+	white.albedo_color = Color(0.93, 0.93, 0.95); white.metallic = 0.30; white.roughness = 0.35
 	var black = StandardMaterial3D.new()
-	black.albedo_color = Color(0.09, 0.09, 0.11)
-	black.metallic = 0.55; black.roughness = 0.30
-
-	# Skin tone for the hand & forearm
+	black.albedo_color = Color(0.09, 0.09, 0.11); black.metallic = 0.55; black.roughness = 0.30
 	var skin = StandardMaterial3D.new()
-	skin.albedo_color = Color(0.95, 0.78, 0.62)
-	skin.metallic = 0.0; skin.roughness = 0.85
+	skin.albedo_color = Color(0.95, 0.78, 0.62); skin.metallic = 0.0; skin.roughness = 0.85
 
-	# ── Gun ──────────────────────────────────────────────────────────────────────
-	# Frame / lower receiver (white)
 	_vm_box(Vector3(0.070, 0.056, 0.240), Vector3( 0.000,  0.000,  0.000), white)
-	# Slide (black, sits on top)
 	_vm_box(Vector3(0.054, 0.046, 0.210), Vector3( 0.000,  0.050, -0.006), black)
-	# Front slide serration block / muzzle housing
 	_vm_box(Vector3(0.050, 0.040, 0.050), Vector3( 0.000,  0.030, -0.150), white)
-	# Barrel tip
 	_vm_box(Vector3(0.022, 0.022, 0.040), Vector3( 0.000,  0.030, -0.190), black)
-	# Rear sight nub
 	_vm_box(Vector3(0.030, 0.014, 0.022), Vector3( 0.000,  0.078,  0.090), black)
-	# Grip (white, angled back)
 	var grip = _vm_box(Vector3(0.060, 0.140, 0.060), Vector3( 0.004, -0.096,  0.080), white)
 	grip.rotation_degrees = Vector3(18.0, 0.0, 0.0)
-	# Trigger guard underside (black)
 	_vm_box(Vector3(0.012, 0.008, 0.058), Vector3( 0.000, -0.030,  0.014), black)
-
-	# ── Hand & forearm (held the gun) ───────────────────────────────────────────
-	# Hand wrapping the grip
 	var hand = _vm_box(Vector3(0.090, 0.110, 0.090), Vector3( 0.010, -0.110,  0.090), skin)
 	hand.rotation_degrees = Vector3(18.0, 0.0, 0.0)
-	# Thumb along the left of the frame
 	_vm_box(Vector3(0.024, 0.030, 0.080), Vector3(-0.040, -0.060,  0.060), skin)
-	# Forearm receding toward the bottom-right corner of the screen
+	var arm = _vm_box(Vector3(0.130, 0.130, 0.300), Vector3( 0.060, -0.230,  0.230), skin)
+	arm.rotation_degrees = Vector3(28.0, -10.0, 6.0)
+
+func _build_vm_shotgun() -> void:
+	var black = StandardMaterial3D.new()
+	black.albedo_color = Color(0.09, 0.09, 0.11); black.metallic = 0.55; black.roughness = 0.30
+	var brown_wood = StandardMaterial3D.new()
+	brown_wood.albedo_color = Color(0.45, 0.28, 0.12); brown_wood.metallic = 0.0; brown_wood.roughness = 0.90
+	var skin = StandardMaterial3D.new()
+	skin.albedo_color = Color(0.95, 0.78, 0.62); skin.metallic = 0.0; skin.roughness = 0.85
+
+	# Barrel (wide, long)
+	_vm_box(Vector3(0.040, 0.040, 0.380), Vector3( 0.000,  0.040, -0.200), black)
+	# Pump slide below barrel
+	_vm_box(Vector3(0.060, 0.030, 0.100), Vector3( 0.000, -0.010, -0.150), brown_wood)
+	# Receiver body
+	_vm_box(Vector3(0.060, 0.060, 0.120), Vector3( 0.000,  0.010,  0.020), black)
+	# Stock
+	var stock = _vm_box(Vector3(0.055, 0.095, 0.200), Vector3( 0.005, -0.055,  0.110), brown_wood)
+	stock.rotation_degrees = Vector3(6.0, 0.0, 0.0)
+	# Stock butt
+	_vm_box(Vector3(0.065, 0.115, 0.035), Vector3( 0.008, -0.080,  0.195), brown_wood)
+	# Trigger guard
+	_vm_box(Vector3(0.012, 0.008, 0.055), Vector3( 0.000, -0.032,  0.020), black)
+	# Trigger hand
+	var hand = _vm_box(Vector3(0.085, 0.105, 0.085), Vector3( 0.012, -0.105,  0.055), skin)
+	hand.rotation_degrees = Vector3(14.0, 0.0, 0.0)
+	# Pump forehand
+	var pump_hand = _vm_box(Vector3(0.080, 0.075, 0.095), Vector3(-0.008, -0.040, -0.150), skin)
+	pump_hand.rotation_degrees = Vector3(0.0, 0.0, 0.0)
+	# Forearm
+	var arm = _vm_box(Vector3(0.130, 0.130, 0.290), Vector3( 0.058, -0.220,  0.220), skin)
+	arm.rotation_degrees = Vector3(26.0, -10.0, 6.0)
+
+func _build_vm_machinegun() -> void:
+	var black = StandardMaterial3D.new()
+	black.albedo_color = Color(0.09, 0.09, 0.11); black.metallic = 0.55; black.roughness = 0.30
+	var dark_metal = StandardMaterial3D.new()
+	dark_metal.albedo_color = Color(0.18, 0.18, 0.20); dark_metal.metallic = 0.70; dark_metal.roughness = 0.30
+	var skin = StandardMaterial3D.new()
+	skin.albedo_color = Color(0.95, 0.78, 0.62); skin.metallic = 0.0; skin.roughness = 0.85
+
+	# Boxy receiver
+	_vm_box(Vector3(0.080, 0.080, 0.300), Vector3( 0.000,  0.000,  0.000), dark_metal)
+	# Long barrel
+	_vm_box(Vector3(0.026, 0.026, 0.200), Vector3( 0.000,  0.027, -0.250), black)
+	# Muzzle brake
+	_vm_box(Vector3(0.042, 0.042, 0.022), Vector3( 0.000,  0.027, -0.360), black)
+	# Carry handle / sight rail on top
+	_vm_box(Vector3(0.020, 0.032, 0.180), Vector3( 0.000,  0.058, -0.040), dark_metal)
+	# Box magazine (hangs below)
+	_vm_box(Vector3(0.055, 0.160, 0.045), Vector3( 0.000, -0.120,  0.040), dark_metal)
+	# Pistol grip
+	var grip = _vm_box(Vector3(0.055, 0.130, 0.055), Vector3( 0.004, -0.100,  0.090), dark_metal)
+	grip.rotation_degrees = Vector3(16.0, 0.0, 0.0)
+	# Trigger guard
+	_vm_box(Vector3(0.012, 0.008, 0.058), Vector3( 0.000, -0.030,  0.020), black)
+	# Trigger hand
+	var hand = _vm_box(Vector3(0.090, 0.110, 0.090), Vector3( 0.010, -0.108,  0.090), skin)
+	hand.rotation_degrees = Vector3(16.0, 0.0, 0.0)
+	_vm_box(Vector3(0.024, 0.030, 0.080), Vector3(-0.040, -0.058,  0.060), skin)
+	# Forearm
 	var arm = _vm_box(Vector3(0.130, 0.130, 0.300), Vector3( 0.060, -0.230,  0.230), skin)
 	arm.rotation_degrees = Vector3(28.0, -10.0, 6.0)
 
