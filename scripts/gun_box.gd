@@ -76,12 +76,16 @@ func _assign_random_gun() -> void:
 func _update_icon() -> void:
 	if _sprite:
 		_sprite.texture = load(GUN_ICONS[gun_type])
+		const PIXEL_SIZES: Array = [0.007, 0.012, 0.011]
+		_sprite.pixel_size = PIXEL_SIZES[gun_type]
 
 func _build_visual() -> void:
 	# Gun icon sprite — always faces the player
 	_sprite = Sprite3D.new()
 	_sprite.texture = load(GUN_ICONS[gun_type])
-	_sprite.pixel_size = 0.007
+	# Larger weapons get a bigger world-space icon so they read clearly from a distance
+	const PIXEL_SIZES: Array = [0.007, 0.012, 0.011]   # pistol, shotgun, machinegun
+	_sprite.pixel_size = PIXEL_SIZES[gun_type]
 	_sprite.billboard = BaseMaterial3D.BILLBOARD_ENABLED
 	_sprite.no_depth_test = true
 	_sprite.position = Vector3(0, 0.8, 0)

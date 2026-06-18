@@ -203,7 +203,7 @@ func _build_hud() -> void:
 	var is_mp     = multiplayer.has_multiplayer_peer()
 	var voice_hint = "  V=Mute/Unmute" if is_mp else ""
 	_hint_label = _make_label(
-		"W/S=Move  ←/→=Strafe  Q/E=Turn  SPACE=Cycle trap  F=Place trap  B=Cycle gun  LMB/TAB=Fire  R=Restart" + voice_hint,
+		"W/S=Move  ←/→=Strafe  Q/E=Turn  SPACE=Cycle trap  N=Place trap  B=Cycle gun  LMB/TAB=Fire  R=Restart" + voice_hint,
 		0, 0, 13, Color(0.8, 0.8, 0.8)
 	)
 	_hint_label.anchor_left   = 0.0; _hint_label.anchor_right = 1.0

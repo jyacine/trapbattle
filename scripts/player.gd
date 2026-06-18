@@ -269,10 +269,17 @@ func _input(event: InputEvent) -> void:
 			pitch = clamp(pitch, -PI / 3.0, PI / 3.0)
 			camera_node.rotation.x = pitch
 
+	# KEY_SPACE is mapped to ui_accept in Godot's default InputMap, which means
+	# InputEventKey for SPACE may be consumed by the GUI layer before we see it.
+	# Catching it via action avoids the conflict.
+	if event.is_action_pressed("ui_accept") and not event.is_echo():
+		_cycle_trap_slot()
+		get_viewport().set_input_as_handled()
+		return
+
 	if event is InputEventKey and event.pressed and not event.echo:
 		match event.keycode:
-			KEY_SPACE:  _cycle_trap_slot()   # cycle to next non-empty trap slot
-			KEY_F:      _try_place()          # place active trap
+			KEY_N:      _try_place()          # place active trap
 			KEY_TAB:    _fire_gun()
 			KEY_B:      _cycle_gun_slot()     # cycle between 2 gun slots
 			KEY_1:      active_trap_slot = 0
