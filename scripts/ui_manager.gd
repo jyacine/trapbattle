@@ -767,6 +767,12 @@ func _build_mobile_buttons() -> void:
 	if player == null: return
 	if not _is_mobile_device(): return
 
+	# On touch-capable laptops the device reports as "touch" (so player.gd ignores
+	# the mouse), yet the user may still drive the on-screen controls with a mouse
+	# or trackpad. Emulating touch from the mouse lets a click+drag on the fire
+	# button both fire AND turn — exactly the same code path as a real finger.
+	Input.set_emulate_touch_from_mouse(true)
+
 	const FSZ := 92.0    # fire button diameter (smaller — less screen clutter)
 	const TSZ :=  68.0   # trap button diameter
 	const MG  :=  20     # screen-edge margin
