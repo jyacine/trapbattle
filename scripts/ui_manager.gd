@@ -165,6 +165,9 @@ func _process(_delta: float) -> void:
 	# Keep the joystick knob parked at the ring centre while idle (also handles resize).
 	if _joy_base_nd != null and _joy_id == -1:
 		_recenter_knob()
+	# Mobile hold-to-fire: while touch is on the fire button, fire every cooldown cycle
+	if _fire_id != -1 and player != null and player._gun_cooldown <= 0.0:
+		player._fire_gun()
 	_update_inventory_bar()
 	if not game_manager.is_playing:
 		_show_overlay()
@@ -904,9 +907,11 @@ func _set_hearts(box: HBoxContainer, count: int, px: float) -> void:
 
 # ── Inventory bar (bottom centre, always visible) ────────────────────────────
 var _trap_btn: Button = null
-var _trap_menu: PanelContainer = null
+var _trap_menu: PanelContainer = null   # kept for compat; no longer used
 var _gun_btn: Button = null
-var _gun_menu: PanelContainer = null
+var _gun_menu: PanelContainer = null    # kept for compat; no longer used
+var _weapon_wheel: WeaponWheel = null
+var _wheel_open_by_key: bool = false
 
 func _build_inventory_bar() -> void:
 	if player == null: return
@@ -941,6 +946,12 @@ func _build_inventory_bar() -> void:
 	_build_button_style(_gun_btn)
 	_inv_bar.add_child(_gun_btn)
 
+	# Weapon wheel overlay (replaces the old popup menus)
+	_weapon_wheel = WeaponWheel.new()
+	_weapon_wheel.player = player
+	_weapon_wheel.slot_selected.connect(_on_wheel_slot_selected)
+	add_child(_weapon_wheel)
+
 func _build_button_style(btn: Button) -> void:
 	btn.flat = false
 	var sb = StyleBoxFlat.new()
@@ -955,18 +966,25 @@ func _build_button_style(btn: Button) -> void:
 	btn.add_theme_font_size_override("font_size", 16)
 
 func _on_trap_btn_pressed() -> void:
-	if _trap_menu != null:
-		_trap_menu.queue_free()
-		_trap_menu = null
-		return
-	_show_trap_menu()
+	_open_wheel()
 
 func _on_gun_btn_pressed() -> void:
-	if _gun_menu != null:
-		_gun_menu.queue_free()
-		_gun_menu = null
-		return
-	_show_gun_menu()
+	_open_wheel()
+
+func _open_wheel() -> void:
+	if _weapon_wheel == null or not game_manager.is_playing: return
+	if _weapon_wheel.visible:
+		_weapon_wheel.close(false)
+	else:
+		_weapon_wheel.open()
+
+func _on_wheel_slot_selected(is_gun: bool, slot_idx: int) -> void:
+	if player == null: return
+	if is_gun:
+		player.active_gun_slot = slot_idx
+		player._rebuild_viewmodel()
+	else:
+		player.active_trap_slot = slot_idx
 
 func _show_trap_menu() -> void:
 	_trap_menu = PanelContainer.new()
@@ -1066,12 +1084,8 @@ func _show_gun_menu() -> void:
 func _update_inventory_bar() -> void:
 	if _trap_btn == null or player == null:
 		return
-	if _trap_menu and not game_manager.is_playing:
-		_trap_menu.queue_free()
-		_trap_menu = null
-	if _gun_menu and not game_manager.is_playing:
-		_gun_menu.queue_free()
-		_gun_menu = null
+	if _weapon_wheel != null and _weapon_wheel.visible and not game_manager.is_playing:
+		_weapon_wheel.close(false)
 	# Keep switch-gun touch button icon in sync with equipped gun
 	if _switch_gun_nd != null:
 		var tr = _switch_gun_nd.get_child(0) as TextureRect
@@ -1160,12 +1174,20 @@ func _on_peer_disconnected_notif(pid: int) -> void:
 # ── Input ─────────────────────────────────────────────────────────────────────
 func _input(event: InputEvent) -> void:
 	# Keyboard shortcuts (always active)
-	if event is InputEventKey and event.pressed and not event.echo:
-		if event.keycode == KEY_R:
+	if event is InputEventKey and not event.echo:
+		if event.keycode == KEY_R and event.pressed:
 			get_tree().reload_current_scene()
-		elif event.keycode == KEY_ESCAPE:
-			# Open the leave-match confirmation instead of quitting outright.
+		elif event.keycode == KEY_ESCAPE and event.pressed:
 			_on_exit_pressed()
+		elif event.keycode == KEY_G:
+			# Hold G to open wheel, release to close & apply
+			if event.pressed and _weapon_wheel != null and not _weapon_wheel.visible:
+				_wheel_open_by_key = true
+				_open_wheel()
+			elif not event.pressed and _wheel_open_by_key:
+				_wheel_open_by_key = false
+				if _weapon_wheel != null and _weapon_wheel.visible:
+					_weapon_wheel.close(true)
 
 	# Touch controls
 	if not _is_mobile_device(): return

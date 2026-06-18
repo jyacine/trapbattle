@@ -46,9 +46,10 @@ var _pickup_cooldown: float = 0.0
 
 # ── Gun system (2 slots) ─────────────────────────────────────────────────────
 var _gun_cooldown: float = 0.0
-var gun_inventory:      Array = [-1, -1]   # gun type per slot (-1 = empty)
-var gun_ammo_inventory: Array = [0,  0 ]   # ammo per slot
+var gun_inventory:      Array = [-1, -1, -1]   # gun type per slot (-1 = empty)
+var gun_ammo_inventory: Array = [0,  0,  0 ]   # ammo per slot
 var active_gun_slot: int = 0
+var _fire_held: bool = false   # true while LMB / touch fire is held
 
 var gun_type: int:   # alias for the active slot's type
 	get: return gun_inventory[active_gun_slot]
@@ -226,6 +227,10 @@ func _physics_process(delta: float) -> void:
 	if _blind_overlay:
 		_blind_overlay.visible = game_manager.has_effect(peer_id, "blind")
 
+	# Continuous fire: fire every cooldown cycle while button held
+	if _fire_held and _gun_cooldown <= 0.0:
+		_fire_gun()
+
 	_update_viewmodel(delta)
 
 	if multiplayer.has_multiplayer_peer():
@@ -253,15 +258,23 @@ func _input(event: InputEvent) -> void:
 	# and look pads (UIManager) handle pointing; processing the emulated mouse here
 	# would let joystick drags also turn the camera and make movement go haywire.
 	if not _is_touch:
-		if event is InputEventMouseButton and event.pressed:
+		if event is InputEventMouseButton:
 			match event.button_index:
 				MOUSE_BUTTON_LEFT:
-					if Input.mouse_mode == Input.MOUSE_MODE_CAPTURED: _fire_gun()
-					else: Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
-				MOUSE_BUTTON_WHEEL_UP:   _cycle_slot(-1)
-				MOUSE_BUTTON_WHEEL_DOWN: _cycle_slot(1)
+					if event.pressed:
+						if Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
+							_fire_held = true
+							_fire_gun()
+						else:
+							Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+					else:
+						_fire_held = false
+				MOUSE_BUTTON_WHEEL_UP:
+					if event.pressed: _cycle_slot(-1)
+				MOUSE_BUTTON_WHEEL_DOWN:
+					if event.pressed: _cycle_slot(1)
 				_:
-					Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+					if event.pressed: Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 
 		if event is InputEventMouseMotion and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
 			_pending_yaw_delta -= event.relative.x * mouse_sensitivity
@@ -306,7 +319,7 @@ func _cycle_trap_slot() -> void:
 	active_trap_slot = (active_trap_slot + 1) % 3
 
 func _cycle_gun_slot() -> void:
-	active_gun_slot = (active_gun_slot + 1) % 2
+	active_gun_slot = (active_gun_slot + 1) % 3
 	_rebuild_viewmodel()
 
 # ── Gun ───────────────────────────────────────────────────────────────────────
@@ -394,9 +407,9 @@ func _try_pickup() -> void:
 		if d < best_gun_dist: best_gun_dist = d; best_gun_box = box
 
 	if best_gun_box != null:
-		# Find a free gun slot; if both filled, overwrite the active slot
+		# Find a free gun slot; if all filled, overwrite the active slot
 		var fill_slot := -1
-		for s in 2:
+		for s in 3:
 			if gun_inventory[s] < 0: fill_slot = s; break
 		if fill_slot < 0: fill_slot = active_gun_slot
 		gun_inventory[fill_slot]      = best_gun_box.gun_type
@@ -540,6 +553,7 @@ func _rebuild_viewmodel() -> void:
 	if   gun_type == Config.GunType.PISTOL:     _build_vm_pistol()
 	elif gun_type == Config.GunType.SHOTGUN:    _build_vm_shotgun()
 	elif gun_type == Config.GunType.MACHINEGUN: _build_vm_machinegun()
+	elif gun_type == Config.GunType.STOVE:      _build_vm_stove()
 
 func _build_vm_pistol() -> void:
 	var white = StandardMaterial3D.new()
@@ -624,6 +638,40 @@ func _build_vm_machinegun() -> void:
 	# Forearm
 	var arm = _vm_box(Vector3(0.130, 0.130, 0.300), Vector3( 0.060, -0.230,  0.230), skin)
 	arm.rotation_degrees = Vector3(28.0, -10.0, 6.0)
+
+func _build_vm_stove() -> void:
+	var metal = StandardMaterial3D.new()
+	metal.albedo_color = Color(0.55, 0.56, 0.60); metal.metallic = 0.70; metal.roughness = 0.30
+	var red_tank = StandardMaterial3D.new()
+	red_tank.albedo_color = Color(0.75, 0.15, 0.05); red_tank.metallic = 0.40; red_tank.roughness = 0.45
+	var dark = StandardMaterial3D.new()
+	dark.albedo_color = Color(0.14, 0.14, 0.16); dark.metallic = 0.55; dark.roughness = 0.40
+	var skin = StandardMaterial3D.new()
+	skin.albedo_color = Color(0.95, 0.78, 0.62); skin.metallic = 0.0; skin.roughness = 0.85
+	# Gas cylinder / tank (rear)
+	var tank = _vm_box(Vector3(0.060, 0.130, 0.060), Vector3(0.005, -0.010, 0.130), red_tank)
+	tank.rotation_degrees = Vector3(8.0, 0.0, 0.0)
+	# Valve / connector
+	_vm_box(Vector3(0.028, 0.022, 0.036), Vector3(0.000, -0.010, 0.072), dark)
+	# Main body / pump housing
+	_vm_box(Vector3(0.085, 0.070, 0.180), Vector3(0.000,  0.010, -0.050), metal)
+	# Pressure gauge (small bump on top)
+	_vm_box(Vector3(0.024, 0.024, 0.024), Vector3(0.000,  0.050, -0.010), dark)
+	# Hose / nozzle tube
+	_vm_box(Vector3(0.022, 0.022, 0.160), Vector3(0.000,  0.010, -0.220), dark)
+	# Nozzle flare tip
+	_vm_box(Vector3(0.036, 0.036, 0.024), Vector3(0.000,  0.010, -0.308), dark)
+	# Grip
+	var grip = _vm_box(Vector3(0.058, 0.120, 0.055), Vector3(0.004, -0.090, 0.060), dark)
+	grip.rotation_degrees = Vector3(14.0, 0.0, 0.0)
+	# Trigger guard
+	_vm_box(Vector3(0.012, 0.008, 0.050), Vector3(0.000, -0.028, 0.012), dark)
+	# Hand
+	var hand = _vm_box(Vector3(0.088, 0.108, 0.088), Vector3(0.010, -0.108, 0.060), skin)
+	hand.rotation_degrees = Vector3(14.0, 0.0, 0.0)
+	# Forearm
+	var arm = _vm_box(Vector3(0.130, 0.130, 0.300), Vector3(0.058, -0.225, 0.230), skin)
+	arm.rotation_degrees = Vector3(26.0, -10.0, 6.0)
 
 # ── Debug overlay ─────────────────────────────────────────────────────────────
 func _build_debug_overlay() -> void:

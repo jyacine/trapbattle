@@ -6,6 +6,7 @@ const GUN_ICONS: Array = [
 	"res://assets/icons/icon_gun.svg",        # 0 pistol
 	"res://assets/icons/icon_shotgun.svg",    # 1 shotgun
 	"res://assets/icons/icon_machinegun.svg", # 2 machinegun
+	"res://assets/icons/icon_stove.svg",      # 3 stove
 ]
 
 # ── References ────────────────────────────────────────────────────────────────
@@ -71,20 +72,19 @@ func _do_respawn() -> void:
 	add_to_group("gun_boxes")
 
 func _assign_random_gun() -> void:
-	gun_type = randi() % 3
+	gun_type = randi() % 4   # 0=pistol, 1=shotgun, 2=machinegun, 3=stove
 
 func _update_icon() -> void:
 	if _sprite:
 		_sprite.texture = load(GUN_ICONS[gun_type])
-		const PIXEL_SIZES: Array = [0.007, 0.012, 0.011]
+		const PIXEL_SIZES: Array = [0.007, 0.012, 0.011, 0.009]
 		_sprite.pixel_size = PIXEL_SIZES[gun_type]
 
 func _build_visual() -> void:
 	# Gun icon sprite — always faces the player
 	_sprite = Sprite3D.new()
 	_sprite.texture = load(GUN_ICONS[gun_type])
-	# Larger weapons get a bigger world-space icon so they read clearly from a distance
-	const PIXEL_SIZES: Array = [0.007, 0.012, 0.011]   # pistol, shotgun, machinegun
+	const PIXEL_SIZES: Array = [0.007, 0.012, 0.011, 0.009]   # pistol, shotgun, machinegun, stove
 	_sprite.pixel_size = PIXEL_SIZES[gun_type]
 	_sprite.billboard = BaseMaterial3D.BILLBOARD_ENABLED
 	_sprite.no_depth_test = true
