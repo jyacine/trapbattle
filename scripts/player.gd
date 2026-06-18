@@ -77,7 +77,7 @@ const RESPAWN_DROP_HEIGHT    := 9.0
 const RESPAWN_DROP_DURATION  := 1.4
 
 # ── Death replay (top-down killcam of the last moments) ───────────────────────
-const REPLAY_SECONDS := 2.5            # how much footage we keep
+const REPLAY_SECONDS := 5.0            # how much footage we keep (matches RESPAWN_DELAY)
 var _replay_buf_pos: Array = []        # ring buffer of recent positions (Vector3)
 var _replay_buf_yaw: Array = []        # ring buffer of recent yaw (float)
 var _replaying:      bool  = false
@@ -699,9 +699,10 @@ func _update_death_replay(delta: float) -> void:
 	var yw: float = lerp_angle(_replay_path_yaw[i], _replay_path_yaw[i2], frac)
 	_replay_avatar.position   = pos
 	_replay_avatar.rotation.y = yw
-	# High, steep top-down chase framing centred on the avatar.
-	_replay_cam.position = pos + Vector3(0.0, 13.0, 5.0)
-	_replay_cam.look_at(pos + Vector3(0.0, 0.8, 0.0), Vector3.UP)
+	# Closer, lower 3/4 overhead framing centred on the avatar (less steep than
+	# straight-down, so the action reads better).
+	_replay_cam.position = pos + Vector3(0.0, 7.5, 6.0)
+	_replay_cam.look_at(pos + Vector3(0.0, 1.0, 0.0), Vector3.UP)
 
 func _end_death_replay() -> void:
 	_replaying = false

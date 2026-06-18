@@ -21,7 +21,7 @@ var respawning: Dictionary = {}
 var _respawn_timers: Dictionary = {}
 var _last_damager:   Dictionary = {}   # victim_pid -> attacker_pid
 
-const RESPAWN_DELAY = 2.0
+const RESPAWN_DELAY = 5.0   # also the death killcam replay length (see player.gd)
 
 # ── Game state ───────────────────────────────────────────────────────────────
 var is_playing: bool = true
