@@ -81,7 +81,7 @@ func _build_visual() -> void:
 	# Gun icon sprite — always faces the player
 	_sprite = Sprite3D.new()
 	_sprite.texture = load(GUN_ICONS[gun_type])
-	_sprite.pixel_size = 0.018
+	_sprite.pixel_size = 0.007
 	_sprite.billboard = BaseMaterial3D.BILLBOARD_ENABLED
 	_sprite.no_depth_test = true
 	_sprite.position = Vector3(0, 0.8, 0)
