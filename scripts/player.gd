@@ -701,8 +701,8 @@ func _update_death_replay(delta: float) -> void:
 	_replay_avatar.rotation.y = yw
 	# Closer, lower 3/4 overhead framing centred on the avatar (less steep than
 	# straight-down, so the action reads better).
-	_replay_cam.position = pos + Vector3(0.0, 7.5, 6.0)
-	_replay_cam.look_at(pos + Vector3(0.0, 1.0, 0.0), Vector3.UP)
+	_replay_cam.position = pos + Vector3(0.0, 3.8, 3.2)
+	_replay_cam.look_at(pos + Vector3(0.0, 0.9, 0.0), Vector3.UP)
 
 func _end_death_replay() -> void:
 	_replaying = false

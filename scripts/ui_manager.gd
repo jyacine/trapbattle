@@ -1297,6 +1297,12 @@ func _input(event: InputEvent) -> void:
 # Move the knob toward `pos` (clamped to ring) and update the strafe vector.
 func _joy_update(pos: Vector2) -> void:
 	if _joy_base_nd == null or player == null: return
+	# Guard: Godot multi-touch can fire a drag event with the joystick's index but
+	# with the look-drag position (right side of screen). Clamping to the left half
+	# prevents that wrong-position from driving touch_move_x all the way to +1.
+	var vp_hw: float = get_viewport().get_visible_rect().size.x * 0.5
+	if pos.x > vp_hw:
+		return
 	var centre:  Vector2 = _joy_base_nd.get_global_rect().get_center()
 	var delta_v: Vector2 = pos - centre
 	var dist:    float   = delta_v.length()
