@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <defs>
+    <linearGradient id="bl_tip" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#e8c840"/>
+      <stop offset="100%" stop-color="#b89020"/>
+    </linearGradient>
+    <linearGradient id="bl_case" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#c8a030"/>
+      <stop offset="60%" stop-color="#e8c050"/>
+      <stop offset="100%" stop-color="#a07820"/>
+    </linearGradient>
+    <linearGradient id="bl_base" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#888890"/>
+      <stop offset="100%" stop-color="#b0b0b8"/>
+    </linearGradient>
+  </defs>
+  <!-- Bullet tip (ogive) -->
+  <ellipse cx="52" cy="32" rx="10" ry="8" fill="url(#bl_tip)"/>
+  <!-- Bullet body / case -->
+  <rect x="18" y="24" width="36" height="16" rx="2" fill="url(#bl_case)"/>
+  <!-- Case cannelure (crimp ring) -->
+  <rect x="30" y="24" width="4" height="16" fill="#906818" opacity="0.5"/>
+  <!-- Primer / base -->
+  <rect x="8" y="22" width="12" height="20" rx="2" fill="url(#bl_base)"/>
+  <circle cx="14" cy="32" r="4" fill="#606068"/>
+  <circle cx="14" cy="32" r="1.5" fill="#3a3a42"/>
+  <!-- Shine highlight on tip -->
+  <ellipse cx="50" cy="28" rx="3" ry="2" fill="white" opacity="0.35"/>
+</svg>

@@ -21,7 +21,7 @@ var respawning: Dictionary = {}
 var _respawn_timers: Dictionary = {}
 var _last_damager:   Dictionary = {}   # victim_pid -> attacker_pid
 
-const RESPAWN_DELAY = 2.0
+const RESPAWN_DELAY = 5.0   # also the death killcam replay length (see player.gd)
 
 # ── Game state ───────────────────────────────────────────────────────────────
 var is_playing: bool = true
@@ -136,13 +136,14 @@ func check_win_condition() -> void:
 
 ## Spawn a visual-only bullet on the remote peers.
 @rpc("any_peer", "call_remote", "reliable")
-func net_spawn_bullet(pos: Vector3, dir: Vector3, owner_pid: int, owner_idx: int) -> void:
+func net_spawn_bullet(pos: Vector3, dir: Vector3, owner_pid: int, owner_idx: int, gun_type: int = 0) -> void:
 	var root = get_parent()
 	var b = Bullet.new()
 	b.local_only    = true
 	b.owner_peer_id = owner_pid
 	b.owner_index   = owner_idx
 	b.direction     = dir
+	b.damage        = Config.GUN_DAMAGE.get(gun_type, 3)
 	b.game_manager  = self
 	b.sound_manager = root.get_node_or_null("SoundManager")
 	b.position      = pos

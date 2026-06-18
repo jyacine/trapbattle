@@ -1,0 +1,70 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 64">
+  <defs>
+    <linearGradient id="st_body" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#888890"/>
+      <stop offset="50%" stop-color="#b0b0bc"/>
+      <stop offset="100%" stop-color="#606068"/>
+    </linearGradient>
+    <linearGradient id="st_tank" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#c04010"/>
+      <stop offset="50%" stop-color="#e06030"/>
+      <stop offset="100%" stop-color="#802808"/>
+    </linearGradient>
+    <linearGradient id="st_flame1" x1="0" y1="1" x2="0" y2="0">
+      <stop offset="0%" stop-color="#ff8800"/>
+      <stop offset="60%" stop-color="#ffdd00"/>
+      <stop offset="100%" stop-color="#ffffff" stop-opacity="0.6"/>
+    </linearGradient>
+    <linearGradient id="st_flame2" x1="0" y1="1" x2="0" y2="0">
+      <stop offset="0%" stop-color="#ff4400"/>
+      <stop offset="70%" stop-color="#ff9900"/>
+      <stop offset="100%" stop-color="#ffee44" stop-opacity="0.5"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Gas tank (rear cylinder, red) -->
+  <ellipse cx="100" cy="35" rx="6" ry="16" fill="url(#st_tank)"/>
+  <rect x="84" y="19" width="16" height="32" rx="2" fill="url(#st_tank)"/>
+  <ellipse cx="84" cy="35" rx="6" ry="16" fill="#c04010"/>
+  <!-- Tank valve/connector -->
+  <rect x="78" y="32" width="8" height="6" rx="2" fill="#505058"/>
+
+  <!-- Main stove body (boxy receiver) -->
+  <rect x="42" y="24" width="38" height="22" rx="4" fill="url(#st_body)"/>
+  <!-- Pressure gauge circle -->
+  <circle cx="55" cy="31" r="5" fill="#3a3a42"/>
+  <circle cx="55" cy="31" r="3.5" fill="#1a2a1a"/>
+  <line x1="55" y1="31" x2="57" y2="28" stroke="#44ff44" stroke-width="1.2"/>
+  <!-- Control knob -->
+  <circle cx="70" cy="31" r="4.5" fill="#2a2a32"/>
+  <circle cx="70" cy="31" r="2.5" fill="#4a4a52"/>
+  <rect x="69" y="27" width="2" height="4" rx="0.5" fill="#888"/>
+
+  <!-- Nozzle / hose -->
+  <rect x="10" y="29" width="34" height="8" rx="4" fill="#505058"/>
+  <!-- Hose coil -->
+  <path d="M26,29 Q30,24 34,29 Q38,34 42,29" stroke="#404048" stroke-width="3" fill="none"/>
+
+  <!-- Nozzle tip -->
+  <rect x="4" y="27" width="9" height="12" rx="2" fill="#606068"/>
+  <rect x="2" y="30" width="5" height="6" rx="1" fill="#3a3a42"/>
+
+  <!-- Flame spray (3 tongues of fire) -->
+  <!-- Outer flame -->
+  <ellipse cx="20" cy="22" rx="6" ry="14" fill="url(#st_flame2)" transform="rotate(-30 20 22)" opacity="0.85"/>
+  <!-- Mid flame -->
+  <ellipse cx="14" cy="18" rx="5" ry="12" fill="url(#st_flame1)" transform="rotate(-45 14 18)" opacity="0.90"/>
+  <!-- Inner hot core -->
+  <ellipse cx="9" cy="28" rx="4" ry="8" fill="url(#st_flame1)" transform="rotate(-15 9 28)" opacity="0.95"/>
+  <!-- Bright center -->
+  <ellipse cx="7" cy="30" rx="2" ry="4" fill="#ffffff" opacity="0.55"/>
+
+  <!-- Grip handle below body -->
+  <polygon points="60,46 80,46 78,60 62,60" fill="#3a3a42"/>
+  <line x1="63" y1="49" x2="76" y2="49" stroke="#555560" stroke-width="0.9"/>
+  <line x1="63" y1="52" x2="76" y2="52" stroke="#555560" stroke-width="0.9"/>
+  <line x1="63" y1="55" x2="76" y2="55" stroke="#555560" stroke-width="0.9"/>
+  <!-- Trigger guard -->
+  <path d="M50,46 Q54,56 60,46" stroke="#505058" stroke-width="2.5" fill="none"/>
+  <line x1="54" y1="46" x2="55" y2="52" stroke="#3a3a42" stroke-width="2"/>
+</svg>

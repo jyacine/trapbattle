@@ -44,13 +44,48 @@ var held_trap: int:                   # read alias used by UI / place code
 	get: return trap_inventory[active_trap_slot]
 var _pickup_cooldown: float = 0.0
 
-# ── Gun ───────────────────────────────────────────────────────────────────────
+# ── Gun system (2 slots) ─────────────────────────────────────────────────────
 var _gun_cooldown: float = 0.0
-const GUN_RANGE    := 28.0
-const GUN_COOLDOWN := 1.5
+var gun_inventory:      Array = [-1, -1, -1]   # gun type per slot (-1 = empty)
+var gun_ammo_inventory: Array = [0,  0,  0 ]   # ammo per slot
+var active_gun_slot: int = 0
+var _fire_held: bool = false   # true while LMB / touch fire is held
+
+var gun_type: int:   # alias for the active slot's type
+	get: return gun_inventory[active_gun_slot]
+	set(v): gun_inventory[active_gun_slot] = v
+
+var gun_ammo: int:   # alias for the active slot's ammo
+	get: return gun_ammo_inventory[active_gun_slot]
+	set(v): gun_ammo_inventory[active_gun_slot] = v
+
+const GUN_RANGE := 28.0
 
 # ── Blind overlay ────────────────────────────────────────────────────────────
 var _blind_overlay: ColorRect
+
+# ── Death / respawn animation ─────────────────────────────────────────────────
+var _death_overlay:    ColorRect = null
+var _replay_banner:    Label     = null
+var _letterbox_top:    ColorRect = null
+var _letterbox_bot:    ColorRect = null
+var _prev_respawning:  bool      = false
+var _respawn_drop_t:   float     = -1.0   # -1 = inactive; 0..1 = falling
+var _respawn_y_from:   float     = 0.0
+var _respawn_y_to:     float     = 0.0
+const RESPAWN_DROP_HEIGHT    := 9.0
+const RESPAWN_DROP_DURATION  := 1.4
+
+# ── Death replay (top-down killcam of the last moments) ───────────────────────
+const REPLAY_SECONDS := 5.0            # how much footage we keep (matches RESPAWN_DELAY)
+var _replay_buf_pos: Array = []        # ring buffer of recent positions (Vector3)
+var _replay_buf_yaw: Array = []        # ring buffer of recent yaw (float)
+var _replaying:      bool  = false
+var _replay_t:       float = 0.0
+var _replay_path_pos: Array = []       # snapshot played back on death
+var _replay_path_yaw: Array = []
+var _replay_cam:     Camera3D = null
+var _replay_avatar:  Node3D   = null
 
 # ── Current grid pos ─────────────────────────────────────────────────────────
 var current_grid_pos: Array = [0, 0]
@@ -120,6 +155,46 @@ func _ready() -> void:
 		_build_viewmodel()
 		_build_debug_overlay()
 		_teleport_to(spawn_cell)
+		# Death / replay overlay layer (above all gameplay layers)
+		var death_layer := CanvasLayer.new()
+		death_layer.layer = 110
+		add_child(death_layer)
+		# Full-screen black — only used for the quick cut-fade into the respawn drop.
+		_death_overlay = ColorRect.new()
+		_death_overlay.set_anchors_preset(Control.PRESET_FULL_RECT)
+		_death_overlay.color = Color(0, 0, 0, 0)
+		_death_overlay.visible = false
+		_death_overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		death_layer.add_child(_death_overlay)
+		# Cinematic letterbox bars + REPLAY banner, shown during the death killcam.
+		_letterbox_top = ColorRect.new()
+		_letterbox_top.color = Color(0, 0, 0, 0.9)
+		_letterbox_top.anchor_right = 1.0
+		_letterbox_top.anchor_bottom = 0.0
+		_letterbox_top.offset_bottom = 64
+		_letterbox_top.visible = false
+		_letterbox_top.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		death_layer.add_child(_letterbox_top)
+		_letterbox_bot = ColorRect.new()
+		_letterbox_bot.color = Color(0, 0, 0, 0.9)
+		_letterbox_bot.anchor_top = 1.0; _letterbox_bot.anchor_right = 1.0; _letterbox_bot.anchor_bottom = 1.0
+		_letterbox_bot.offset_top = -64
+		_letterbox_bot.visible = false
+		_letterbox_bot.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		death_layer.add_child(_letterbox_bot)
+		_replay_banner = Label.new()
+		_replay_banner.text = "▶  REPLAY"
+		_replay_banner.add_theme_font_size_override("font_size", 28)
+		_replay_banner.add_theme_color_override("font_color", Color(1.0, 0.35, 0.30))
+		_replay_banner.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.9))
+		_replay_banner.add_theme_constant_override("shadow_offset_x", 2)
+		_replay_banner.add_theme_constant_override("shadow_offset_y", 2)
+		_replay_banner.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		_replay_banner.anchor_right = 1.0
+		_replay_banner.offset_top = 78
+		_replay_banner.visible = false
+		_replay_banner.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		death_layer.add_child(_replay_banner)
 		if not OS.has_feature("web"):
 			Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 	else:
@@ -129,6 +204,8 @@ func _ready() -> void:
 # ────────────────────────────────────────────────────────────────────────────
 func _physics_process(delta: float) -> void:
 	if not game_manager.is_playing:
+		if _replaying:
+			_end_death_replay()   # match ended mid-respawn — restore the normal camera
 		return
 
 	if not is_local:
@@ -151,8 +228,52 @@ func _physics_process(delta: float) -> void:
 	if absf(_pending_yaw_delta) < 0.0001:
 		_pending_yaw_delta = 0.0   # snap-drain the tail to avoid lingering drift
 
-	if game_manager.respawning.get(peer_id, false):
+	# ── Respawn state machine ────────────────────────────────────────────────
+	# On death: play a top-down replay of the last moments (instead of a fade).
+	# When the respawn timer ends: cut back, teleport to the spawn point high in
+	# the air, and drop down to the ground.
+	var is_respawning: bool = game_manager.respawning.get(peer_id, false)
+	if is_respawning and not _prev_respawning:
+		# Just died → start the killcam replay (stay where we died, frozen).
+		_respawn_drop_t = -1.0
+		_start_death_replay()
+	elif not is_respawning and _prev_respawning:
+		# Just respawned → stop replay, teleport to spawn, lift up, drop + fade in.
+		_end_death_replay()
 		_teleport_to(game_manager.get_spawn_for_index(player_index))
+		_respawn_y_to   = position.y
+		_respawn_y_from = position.y + RESPAWN_DROP_HEIGHT
+		position.y      = _respawn_y_from
+		reset_physics_interpolation()   # don't smear the camera from ground → sky
+		_respawn_drop_t = 0.0
+		velocity        = Vector3.ZERO
+		if _death_overlay:
+			# Black at the cut, then fade back to gameplay over the start of the drop.
+			_death_overlay.visible = true
+			_death_overlay.color = Color(0, 0, 0, 1.0)
+			var tw_in := create_tween()
+			tw_in.tween_property(_death_overlay, "color", Color(0, 0, 0, 0), 0.5)
+			tw_in.tween_callback(func(): if _death_overlay: _death_overlay.visible = false)
+	_prev_respawning = is_respawning
+	if is_respawning:
+		if _replaying:
+			_update_death_replay(delta)
+		return
+
+	# While dropping in from the sky, the player free-falls (no steering) — animate
+	# Y here and skip the normal movement block below.
+	if _respawn_drop_t >= 0.0:
+		_respawn_drop_t = minf(_respawn_drop_t + delta / RESPAWN_DROP_DURATION, 1.0)
+		var drop_e: float = _respawn_drop_t * _respawn_drop_t   # ease-in: accelerating fall
+		position.y = lerpf(_respawn_y_from, _respawn_y_to, drop_e)
+		velocity   = Vector3.ZERO
+		if _respawn_drop_t >= 1.0:
+			_respawn_drop_t = -1.0
+			position.y = _respawn_y_to
+		current_grid_pos = game_manager.world_to_grid(position)
+		_update_viewmodel(delta)
+		if multiplayer.has_multiplayer_peer():
+			_net_pos.rpc(position, yaw)
 		return
 
 	var is_confused = game_manager.has_effect(peer_id, "confusion")
@@ -211,9 +332,14 @@ func _physics_process(delta: float) -> void:
 
 	current_grid_pos = game_manager.world_to_grid(position)
 	_try_pickup()
+	_record_replay_frame()
 
 	if _blind_overlay:
 		_blind_overlay.visible = game_manager.has_effect(peer_id, "blind")
+
+	# Continuous fire: fire every cooldown cycle while button held
+	if _fire_held and _gun_cooldown <= 0.0:
+		_fire_gun()
 
 	_update_viewmodel(delta)
 
@@ -242,15 +368,23 @@ func _input(event: InputEvent) -> void:
 	# and look pads (UIManager) handle pointing; processing the emulated mouse here
 	# would let joystick drags also turn the camera and make movement go haywire.
 	if not _is_touch:
-		if event is InputEventMouseButton and event.pressed:
+		if event is InputEventMouseButton:
 			match event.button_index:
 				MOUSE_BUTTON_LEFT:
-					if Input.mouse_mode == Input.MOUSE_MODE_CAPTURED: _fire_gun()
-					else: Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
-				MOUSE_BUTTON_WHEEL_UP:   _cycle_slot(-1)
-				MOUSE_BUTTON_WHEEL_DOWN: _cycle_slot(1)
+					if event.pressed:
+						if Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
+							_fire_held = true
+							_fire_gun()
+						else:
+							Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+					else:
+						_fire_held = false
+				MOUSE_BUTTON_WHEEL_UP:
+					if event.pressed: _cycle_slot(-1)
+				MOUSE_BUTTON_WHEEL_DOWN:
+					if event.pressed: _cycle_slot(1)
 				_:
-					Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+					if event.pressed: Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 
 		if event is InputEventMouseMotion and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
 			_pending_yaw_delta -= event.relative.x * mouse_sensitivity
@@ -258,10 +392,19 @@ func _input(event: InputEvent) -> void:
 			pitch = clamp(pitch, -PI / 3.0, PI / 3.0)
 			camera_node.rotation.x = pitch
 
+	# KEY_SPACE is mapped to ui_accept in Godot's default InputMap, which means
+	# InputEventKey for SPACE may be consumed by the GUI layer before we see it.
+	# Catching it via action avoids the conflict.
+	if event.is_action_pressed("ui_accept") and not event.is_echo():
+		_cycle_trap_slot()
+		get_viewport().set_input_as_handled()
+		return
+
 	if event is InputEventKey and event.pressed and not event.echo:
 		match event.keycode:
-			KEY_SPACE:  _try_place()
+			KEY_N:      _try_place()          # place active trap
 			KEY_TAB:    _fire_gun()
+			KEY_B:      _cycle_gun_slot()     # cycle between 2 gun slots
 			KEY_1:      active_trap_slot = 0
 			KEY_2:      active_trap_slot = 1
 			KEY_3:      active_trap_slot = 2
@@ -276,11 +419,29 @@ func _input(event: InputEvent) -> void:
 func _cycle_slot(dir: int) -> void:
 	active_trap_slot = (active_trap_slot + dir + 3) % 3
 
+func _cycle_trap_slot() -> void:
+	for i in 3:
+		var s := (active_trap_slot + i + 1) % 3
+		if trap_inventory[s] >= 0:
+			active_trap_slot = s
+			return
+	# all empty — still advance so player sees the slot change
+	active_trap_slot = (active_trap_slot + 1) % 3
+
+func _cycle_gun_slot() -> void:
+	active_gun_slot = (active_gun_slot + 1) % 3
+	_rebuild_viewmodel()
+
 # ── Gun ───────────────────────────────────────────────────────────────────────
 func _fire_gun() -> void:
-	if _gun_cooldown > 0.0 or not game_manager.is_playing:
+	if gun_type < 0 or _gun_cooldown > 0.0 or not game_manager.is_playing:
 		return
-	_gun_cooldown = GUN_COOLDOWN
+	# Check ammo
+	if gun_ammo == 0:
+		return
+
+	var cooldown = Config.GUN_COOLDOWN[gun_type]
+	_gun_cooldown = cooldown
 	_vm_recoil    = 1.0
 	if sound_manager: sound_manager.play_gun_fire()
 
@@ -300,7 +461,14 @@ func _fire_gun() -> void:
 	_spawn_bullet_local(spawn_pos, forward)
 
 	if multiplayer.has_multiplayer_peer():
-		game_manager.net_spawn_bullet.rpc(spawn_pos, forward, peer_id, player_index)
+		game_manager.net_spawn_bullet.rpc(spawn_pos, forward, peer_id, player_index, gun_type)
+
+	# Consume ammo (unlimited ammo stays at -1)
+	if gun_ammo > 0:
+		gun_ammo -= 1
+		if gun_ammo == 0:
+			gun_inventory[active_gun_slot] = -1   # slot empty, drop it
+			_rebuild_viewmodel()
 
 func _spawn_bullet_local(pos: Vector3, dir: Vector3) -> void:
 	var b = Bullet.new()
@@ -311,6 +479,7 @@ func _spawn_bullet_local(pos: Vector3, dir: Vector3) -> void:
 	b.game_manager  = game_manager
 	b.sound_manager = sound_manager
 	b.position      = pos
+	b.damage        = Config.GUN_DAMAGE[gun_type]
 	get_parent().add_child(b)
 
 # ── Trap placement ────────────────────────────────────────────────────────────
@@ -338,12 +507,37 @@ func _try_place() -> void:
 func _try_pickup() -> void:
 	if _pickup_cooldown > 0.0 or trap_manager == null:
 		return
-	# Find first empty slot — if all 3 are full, don't pick up
+	var pickup_dist = Config.CELL_SIZE * 0.75
+
+	# Try to pick up gun first (prioritize guns)
+	var best_gun_box = null
+	var best_gun_dist = pickup_dist
+	for box in get_tree().get_nodes_in_group("gun_boxes"):
+		var d = position.distance_to(box.position)
+		if d < best_gun_dist: best_gun_dist = d; best_gun_box = box
+
+	if best_gun_box != null:
+		# Find a free gun slot; if all filled, overwrite the active slot
+		var fill_slot := -1
+		for s in 3:
+			if gun_inventory[s] < 0: fill_slot = s; break
+		if fill_slot < 0: fill_slot = active_gun_slot
+		gun_inventory[fill_slot]      = best_gun_box.gun_type
+		gun_ammo_inventory[fill_slot] = Config.GUN_AMMO_MAX[best_gun_box.gun_type]
+		active_gun_slot = fill_slot
+		best_gun_box.respawn_box()
+		_rebuild_viewmodel()
+		_pickup_cooldown = 0.5
+		if sound_manager: sound_manager.play_pickup()
+		return
+
+	# Try to pick up trap (if no gun nearby)
 	var slot := -1
 	for i in 3:
 		if trap_inventory[i] < 0: slot = i; break
 	if slot < 0: return
-	var best_box = null; var best_dist = Config.CELL_SIZE * 0.75
+	var best_box = null
+	var best_dist = pickup_dist
 	for box in get_tree().get_nodes_in_group("trap_boxes"):
 		var d = position.distance_to(box.position)
 		if d < best_dist: best_dist = d; best_box = box
@@ -453,56 +647,238 @@ func get_grid_position() -> Array:
 func set_blind_overlay(overlay: ColorRect) -> void:
 	_blind_overlay = overlay
 
+# ── Death replay (top-down killcam) ───────────────────────────────────────────
+# Record one position+yaw sample per physics frame into a rolling buffer that
+# keeps the last REPLAY_SECONDS of movement.
+func _record_replay_frame() -> void:
+	_replay_buf_pos.append(position)
+	_replay_buf_yaw.append(yaw)
+	var cap: int = int(REPLAY_SECONDS * float(Engine.physics_ticks_per_second))
+	while _replay_buf_pos.size() > cap:
+		_replay_buf_pos.pop_front()
+		_replay_buf_yaw.pop_front()
+
+func _start_death_replay() -> void:
+	if _replay_buf_pos.size() < 2:
+		# Not enough footage (died right after spawn) → just black out the screen.
+		if _death_overlay:
+			_death_overlay.visible = true
+			_death_overlay.color = Color(0, 0, 0, 0.85)
+		return
+	_replay_path_pos = _replay_buf_pos.duplicate()
+	_replay_path_yaw = _replay_buf_yaw.duplicate()
+	_replaying = true
+	_replay_t  = 0.0
+
+	if _viewmodel_root: _viewmodel_root.visible = false
+
+	# Visible stand-in for the (otherwise body-less, first-person) local player.
+	_replay_avatar = _make_replay_avatar()
+	get_parent().add_child(_replay_avatar)
+
+	# Dedicated top-down camera that overrides the first-person view.
+	_replay_cam = Camera3D.new()
+	get_parent().add_child(_replay_cam)
+	_replay_cam.current = true
+
+	if _letterbox_top: _letterbox_top.visible = true
+	if _letterbox_bot: _letterbox_bot.visible = true
+	if _replay_banner: _replay_banner.visible = true
+
+func _update_death_replay(delta: float) -> void:
+	var n: int = _replay_path_pos.size()
+	if n < 2 or _replay_cam == null or _replay_avatar == null:
+		return
+	# Play the whole clip once across the respawn delay.
+	_replay_t = minf(_replay_t + delta / float(GameManager.RESPAWN_DELAY), 1.0)
+	var f: float  = _replay_t * float(n - 1)
+	var i: int    = int(f)
+	var i2: int   = mini(i + 1, n - 1)
+	var frac: float = f - float(i)
+	var pos: Vector3 = (_replay_path_pos[i] as Vector3).lerp(_replay_path_pos[i2], frac)
+	var yw: float = lerp_angle(_replay_path_yaw[i], _replay_path_yaw[i2], frac)
+	_replay_avatar.position   = pos
+	_replay_avatar.rotation.y = yw
+	# Closer, lower 3/4 overhead framing centred on the avatar (less steep than
+	# straight-down, so the action reads better).
+	_replay_cam.position = pos + Vector3(0.0, 7.5, 6.0)
+	_replay_cam.look_at(pos + Vector3(0.0, 1.0, 0.0), Vector3.UP)
+
+func _end_death_replay() -> void:
+	_replaying = false
+	if is_instance_valid(_replay_cam):    _replay_cam.queue_free()
+	if is_instance_valid(_replay_avatar): _replay_avatar.queue_free()
+	_replay_cam = null
+	_replay_avatar = null
+	if camera_node: camera_node.current = true
+	if _viewmodel_root: _viewmodel_root.visible = (gun_type >= 0)
+	if _letterbox_top: _letterbox_top.visible = false
+	if _letterbox_bot: _letterbox_bot.visible = false
+	if _replay_banner: _replay_banner.visible = false
+	_replay_path_pos.clear()
+	_replay_path_yaw.clear()
+	# Start recording fresh from the new spawn so a quick re-death never replays
+	# across the teleport jump.
+	_replay_buf_pos.clear()
+	_replay_buf_yaw.clear()
+
+func _make_replay_avatar() -> Node3D:
+	var root := Node3D.new()
+	var pc: Color = Config.PLAYER_COLORS[player_index % Config.PLAYER_COLORS.size()]
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = pc
+	mat.emission_enabled = true; mat.emission = pc; mat.emission_energy_multiplier = 0.7
+	mat.metallic = 0.4; mat.roughness = 0.4
+	# Body capsule
+	var body := MeshInstance3D.new()
+	var cap := CapsuleMesh.new(); cap.radius = 0.30; cap.height = 1.6
+	body.mesh = cap; body.set_surface_override_material(0, mat)
+	body.position = Vector3(0, 0.9, 0)
+	root.add_child(body)
+	# Forward-pointing nose cone (shows facing direction from above)
+	var nose := MeshInstance3D.new()
+	var cone := CylinderMesh.new(); cone.top_radius = 0.0; cone.bottom_radius = 0.20; cone.height = 0.5
+	nose.mesh = cone; nose.set_surface_override_material(0, mat)
+	nose.rotation = Vector3(-PI / 2.0, 0, 0)   # +Y → -Z (player forward)
+	nose.position = Vector3(0, 0.9, -0.55)
+	root.add_child(nose)
+	return root
+
 # ── Viewmodel ─────────────────────────────────────────────────────────────────
 func _build_viewmodel() -> void:
 	_viewmodel_root = Node3D.new()
-	# Held low and to the right, pointing forward — matches the FPS reference shot.
-	_viewmodel_root.position        = Vector3(0.20, -0.26, -0.42)
+	_viewmodel_root.position         = Vector3(0.20, -0.26, -0.42)
 	_viewmodel_root.rotation_degrees = Vector3(-4.0, -6.0, 0.0)
+	_viewmodel_root.visible          = false   # hidden until a gun is picked up
 	camera_node.add_child(_viewmodel_root)
 
-	# ── Materials ──────────────────────────────────────────────────────────────
-	# White "Handcannon" body
+func _rebuild_viewmodel() -> void:
+	if _viewmodel_root == null: return
+	for c in _viewmodel_root.get_children():
+		c.queue_free()
+	_viewmodel_root.visible = (gun_type >= 0)
+	if   gun_type == Config.GunType.PISTOL:     _build_vm_pistol()
+	elif gun_type == Config.GunType.SHOTGUN:    _build_vm_shotgun()
+	elif gun_type == Config.GunType.MACHINEGUN: _build_vm_machinegun()
+	elif gun_type == Config.GunType.STOVE:      _build_vm_stove()
+
+func _build_vm_pistol() -> void:
 	var white = StandardMaterial3D.new()
-	white.albedo_color = Color(0.93, 0.93, 0.95)
-	white.metallic = 0.30; white.roughness = 0.35
-
-	# Black slide / barrel / details
+	white.albedo_color = Color(0.93, 0.93, 0.95); white.metallic = 0.30; white.roughness = 0.35
 	var black = StandardMaterial3D.new()
-	black.albedo_color = Color(0.09, 0.09, 0.11)
-	black.metallic = 0.55; black.roughness = 0.30
-
-	# Skin tone for the hand & forearm
+	black.albedo_color = Color(0.09, 0.09, 0.11); black.metallic = 0.55; black.roughness = 0.30
 	var skin = StandardMaterial3D.new()
-	skin.albedo_color = Color(0.95, 0.78, 0.62)
-	skin.metallic = 0.0; skin.roughness = 0.85
+	skin.albedo_color = Color(0.95, 0.78, 0.62); skin.metallic = 0.0; skin.roughness = 0.85
 
-	# ── Gun ──────────────────────────────────────────────────────────────────────
-	# Frame / lower receiver (white)
 	_vm_box(Vector3(0.070, 0.056, 0.240), Vector3( 0.000,  0.000,  0.000), white)
-	# Slide (black, sits on top)
 	_vm_box(Vector3(0.054, 0.046, 0.210), Vector3( 0.000,  0.050, -0.006), black)
-	# Front slide serration block / muzzle housing
 	_vm_box(Vector3(0.050, 0.040, 0.050), Vector3( 0.000,  0.030, -0.150), white)
-	# Barrel tip
 	_vm_box(Vector3(0.022, 0.022, 0.040), Vector3( 0.000,  0.030, -0.190), black)
-	# Rear sight nub
 	_vm_box(Vector3(0.030, 0.014, 0.022), Vector3( 0.000,  0.078,  0.090), black)
-	# Grip (white, angled back)
 	var grip = _vm_box(Vector3(0.060, 0.140, 0.060), Vector3( 0.004, -0.096,  0.080), white)
 	grip.rotation_degrees = Vector3(18.0, 0.0, 0.0)
-	# Trigger guard underside (black)
 	_vm_box(Vector3(0.012, 0.008, 0.058), Vector3( 0.000, -0.030,  0.014), black)
-
-	# ── Hand & forearm (held the gun) ───────────────────────────────────────────
-	# Hand wrapping the grip
 	var hand = _vm_box(Vector3(0.090, 0.110, 0.090), Vector3( 0.010, -0.110,  0.090), skin)
 	hand.rotation_degrees = Vector3(18.0, 0.0, 0.0)
-	# Thumb along the left of the frame
 	_vm_box(Vector3(0.024, 0.030, 0.080), Vector3(-0.040, -0.060,  0.060), skin)
-	# Forearm receding toward the bottom-right corner of the screen
 	var arm = _vm_box(Vector3(0.130, 0.130, 0.300), Vector3( 0.060, -0.230,  0.230), skin)
 	arm.rotation_degrees = Vector3(28.0, -10.0, 6.0)
+
+func _build_vm_shotgun() -> void:
+	var black = StandardMaterial3D.new()
+	black.albedo_color = Color(0.09, 0.09, 0.11); black.metallic = 0.55; black.roughness = 0.30
+	var brown_wood = StandardMaterial3D.new()
+	brown_wood.albedo_color = Color(0.45, 0.28, 0.12); brown_wood.metallic = 0.0; brown_wood.roughness = 0.90
+	var skin = StandardMaterial3D.new()
+	skin.albedo_color = Color(0.95, 0.78, 0.62); skin.metallic = 0.0; skin.roughness = 0.85
+
+	# Barrel (wide, long)
+	_vm_box(Vector3(0.040, 0.040, 0.380), Vector3( 0.000,  0.040, -0.200), black)
+	# Pump slide below barrel
+	_vm_box(Vector3(0.060, 0.030, 0.100), Vector3( 0.000, -0.010, -0.150), brown_wood)
+	# Receiver body
+	_vm_box(Vector3(0.060, 0.060, 0.120), Vector3( 0.000,  0.010,  0.020), black)
+	# Stock
+	var stock = _vm_box(Vector3(0.055, 0.095, 0.200), Vector3( 0.005, -0.055,  0.110), brown_wood)
+	stock.rotation_degrees = Vector3(6.0, 0.0, 0.0)
+	# Stock butt
+	_vm_box(Vector3(0.065, 0.115, 0.035), Vector3( 0.008, -0.080,  0.195), brown_wood)
+	# Trigger guard
+	_vm_box(Vector3(0.012, 0.008, 0.055), Vector3( 0.000, -0.032,  0.020), black)
+	# Trigger hand
+	var hand = _vm_box(Vector3(0.085, 0.105, 0.085), Vector3( 0.012, -0.105,  0.055), skin)
+	hand.rotation_degrees = Vector3(14.0, 0.0, 0.0)
+	# Pump forehand
+	var pump_hand = _vm_box(Vector3(0.080, 0.075, 0.095), Vector3(-0.008, -0.040, -0.150), skin)
+	pump_hand.rotation_degrees = Vector3(0.0, 0.0, 0.0)
+	# Forearm
+	var arm = _vm_box(Vector3(0.130, 0.130, 0.290), Vector3( 0.058, -0.220,  0.220), skin)
+	arm.rotation_degrees = Vector3(26.0, -10.0, 6.0)
+
+func _build_vm_machinegun() -> void:
+	var black = StandardMaterial3D.new()
+	black.albedo_color = Color(0.09, 0.09, 0.11); black.metallic = 0.55; black.roughness = 0.30
+	var dark_metal = StandardMaterial3D.new()
+	dark_metal.albedo_color = Color(0.18, 0.18, 0.20); dark_metal.metallic = 0.70; dark_metal.roughness = 0.30
+	var skin = StandardMaterial3D.new()
+	skin.albedo_color = Color(0.95, 0.78, 0.62); skin.metallic = 0.0; skin.roughness = 0.85
+
+	# Boxy receiver
+	_vm_box(Vector3(0.080, 0.080, 0.300), Vector3( 0.000,  0.000,  0.000), dark_metal)
+	# Long barrel
+	_vm_box(Vector3(0.026, 0.026, 0.200), Vector3( 0.000,  0.027, -0.250), black)
+	# Muzzle brake
+	_vm_box(Vector3(0.042, 0.042, 0.022), Vector3( 0.000,  0.027, -0.360), black)
+	# Carry handle / sight rail on top
+	_vm_box(Vector3(0.020, 0.032, 0.180), Vector3( 0.000,  0.058, -0.040), dark_metal)
+	# Box magazine (hangs below)
+	_vm_box(Vector3(0.055, 0.160, 0.045), Vector3( 0.000, -0.120,  0.040), dark_metal)
+	# Pistol grip
+	var grip = _vm_box(Vector3(0.055, 0.130, 0.055), Vector3( 0.004, -0.100,  0.090), dark_metal)
+	grip.rotation_degrees = Vector3(16.0, 0.0, 0.0)
+	# Trigger guard
+	_vm_box(Vector3(0.012, 0.008, 0.058), Vector3( 0.000, -0.030,  0.020), black)
+	# Trigger hand
+	var hand = _vm_box(Vector3(0.090, 0.110, 0.090), Vector3( 0.010, -0.108,  0.090), skin)
+	hand.rotation_degrees = Vector3(16.0, 0.0, 0.0)
+	_vm_box(Vector3(0.024, 0.030, 0.080), Vector3(-0.040, -0.058,  0.060), skin)
+	# Forearm
+	var arm = _vm_box(Vector3(0.130, 0.130, 0.300), Vector3( 0.060, -0.230,  0.230), skin)
+	arm.rotation_degrees = Vector3(28.0, -10.0, 6.0)
+
+func _build_vm_stove() -> void:
+	var metal = StandardMaterial3D.new()
+	metal.albedo_color = Color(0.55, 0.56, 0.60); metal.metallic = 0.70; metal.roughness = 0.30
+	var red_tank = StandardMaterial3D.new()
+	red_tank.albedo_color = Color(0.75, 0.15, 0.05); red_tank.metallic = 0.40; red_tank.roughness = 0.45
+	var dark = StandardMaterial3D.new()
+	dark.albedo_color = Color(0.14, 0.14, 0.16); dark.metallic = 0.55; dark.roughness = 0.40
+	var skin = StandardMaterial3D.new()
+	skin.albedo_color = Color(0.95, 0.78, 0.62); skin.metallic = 0.0; skin.roughness = 0.85
+	# Gas cylinder / tank (rear)
+	var tank = _vm_box(Vector3(0.060, 0.130, 0.060), Vector3(0.005, -0.010, 0.130), red_tank)
+	tank.rotation_degrees = Vector3(8.0, 0.0, 0.0)
+	# Valve / connector
+	_vm_box(Vector3(0.028, 0.022, 0.036), Vector3(0.000, -0.010, 0.072), dark)
+	# Main body / pump housing
+	_vm_box(Vector3(0.085, 0.070, 0.180), Vector3(0.000,  0.010, -0.050), metal)
+	# Pressure gauge (small bump on top)
+	_vm_box(Vector3(0.024, 0.024, 0.024), Vector3(0.000,  0.050, -0.010), dark)
+	# Hose / nozzle tube
+	_vm_box(Vector3(0.022, 0.022, 0.160), Vector3(0.000,  0.010, -0.220), dark)
+	# Nozzle flare tip
+	_vm_box(Vector3(0.036, 0.036, 0.024), Vector3(0.000,  0.010, -0.308), dark)
+	# Grip
+	var grip = _vm_box(Vector3(0.058, 0.120, 0.055), Vector3(0.004, -0.090, 0.060), dark)
+	grip.rotation_degrees = Vector3(14.0, 0.0, 0.0)
+	# Trigger guard
+	_vm_box(Vector3(0.012, 0.008, 0.050), Vector3(0.000, -0.028, 0.012), dark)
+	# Hand
+	var hand = _vm_box(Vector3(0.088, 0.108, 0.088), Vector3(0.010, -0.108, 0.060), skin)
+	hand.rotation_degrees = Vector3(14.0, 0.0, 0.0)
+	# Forearm
+	var arm = _vm_box(Vector3(0.130, 0.130, 0.300), Vector3(0.058, -0.225, 0.230), skin)
+	arm.rotation_degrees = Vector3(26.0, -10.0, 6.0)
 
 # ── Debug overlay ─────────────────────────────────────────────────────────────
 func _build_debug_overlay() -> void:

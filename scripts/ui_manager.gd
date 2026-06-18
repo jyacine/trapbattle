@@ -80,26 +80,38 @@ var _joy_origin:  Vector2 = Vector2.ZERO
 var _joy_base_nd: Panel   = null
 var _joy_knob_nd: Panel   = null
 
-var _look_id:     int     = -1
-var _look_prev:   Vector2 = Vector2.ZERO
+var _look_id:          int     = -1
+var _look_prev:        Vector2 = Vector2.ZERO
+var _look_prev_fire:   Vector2 = Vector2.ZERO   # track fire-drag position for turn-while-firing
 
-var _fire_nd:     Panel   = null   # visual-only circle for FIRE
-var _trap_nd:     Panel   = null   # visual-only circle for TRAP
-var _fire_id:     int     = -1
-var _trap_id:     int     = -1
+var _fire_nd:       Panel = null
+var _trap_nd:       Panel = null
+var _switch_gun_nd: Panel = null
+var _fire_id:       int   = -1
+var _trap_id:       int   = -1
+var _switch_gun_id: int   = -1
 
 # ── Crosshair ─────────────────────────────────────────────────────────────────
 var _crosshair_parts: Array = []
 
+# ── Gun icons (index matches Config.GunType) ──────────────────────────────────
+const GUN_ICONS: Array = [
+	"res://assets/icons/icon_gun.svg",
+	"res://assets/icons/icon_shotgun.svg",
+	"res://assets/icons/icon_machinegun.svg",
+]
+
 # ── Device detection ──────────────────────────────────────────────────────────
 static func _is_mobile_device() -> bool:
+	return _is_touch_device()
+
+static func _is_touch_device() -> bool:
 	if OS.has_feature("android") or OS.has_feature("ios"):
 		return true
 	if OS.has_feature("web"):
-		# Ask the browser whether a touch screen is present
 		var result = JavaScriptBridge.eval("navigator.maxTouchPoints > 0 ? 1 : 0")
 		return int(result) > 0
-	return false
+	return DisplayServer.is_touchscreen_available()
 
 # ────────────────────────────────────────────────────────────────────────────
 func _ready() -> void:
@@ -154,6 +166,9 @@ func _process(_delta: float) -> void:
 	# Keep the joystick knob parked at the ring centre while idle (also handles resize).
 	if _joy_base_nd != null and _joy_id == -1:
 		_recenter_knob()
+	# Mobile hold-to-fire: while touch is on the fire button, fire every cooldown cycle
+	if _fire_id != -1 and player != null and player._gun_cooldown <= 0.0:
+		player._fire_gun()
 	_update_inventory_bar()
 	if not game_manager.is_playing:
 		_show_overlay()
@@ -180,9 +195,7 @@ func _build_hud() -> void:
 
 	_trap_label = _make_label("", 10, 44, 18, Color.WHITE)
 	add_child(_trap_label)
-
-	_gun_label = _make_label("", 10, 72, 17, Color(0.3, 1.0, 0.3))
-	add_child(_gun_label)
+	# _gun_label intentionally omitted — active weapon shown on the Select button
 
 	_effects_label = _make_label("", 10, 0, 17, Color(0.8, 1.0, 0.8))
 	_effects_label.anchor_top    = 1.0; _effects_label.anchor_bottom = 1.0
@@ -192,7 +205,7 @@ func _build_hud() -> void:
 	var is_mp     = multiplayer.has_multiplayer_peer()
 	var voice_hint = "  V=Mute/Unmute" if is_mp else ""
 	_hint_label = _make_label(
-		"W/S=Move  ←/→=Strafe  Q/E=Turn  Walk over box=Pick up  SPACE=Trap  LMB=Fire  R=Restart" + voice_hint,
+		"W/S=Move  ←/→=Strafe  Q/E=Turn  SPACE=Cycle trap  N=Place trap  B=Cycle gun  LMB/TAB=Fire  R=Restart" + voice_hint,
 		0, 0, 13, Color(0.8, 0.8, 0.8)
 	)
 	_hint_label.anchor_left   = 0.0; _hint_label.anchor_right = 1.0
@@ -497,12 +510,7 @@ func _update_hud() -> void:
 		if _trap_nd != null:
 			_trap_nd.modulate = Color(1, 1, 1, 0.40)
 
-	if player._gun_cooldown > 0.0:
-		_gun_label.text = "Gun: %.1fs" % player._gun_cooldown
-		_gun_label.add_theme_color_override("font_color", Color(0.8, 0.5, 0.2))
-	else:
-		_gun_label.text = "Gun: READY  (LMB / TAB)"
-		_gun_label.add_theme_color_override("font_color", Color(0.3, 1.0, 0.3))
+	# (gun state now shown on the Select button instead of a HUD label)
 
 	var fx_text = ""
 	for eff in game_manager.effects.get(pid, {}).keys():
@@ -546,17 +554,16 @@ func _update_minimap() -> void:
 					var px = c * MM_CELL + dx; var py = r * MM_CELL + dy
 					if px < w and py < h: _mm_image.set_pixel(px, py, col)
 
-	if player != null:
-		var pg = player.get_grid_position()
-		_mm_dot(pg[0], pg[1], Color.CYAN, 3)
-
+	# Other players first, then the local player on top.
 	for opp in get_tree().get_nodes_in_group("players"):
 		if opp == player or not is_instance_valid(opp): continue
 		var idx = opp.get("player_index") if opp.get("player_index") != null else 1
 		var col = Config.PLAYER_COLORS[idx % Config.PLAYER_COLORS.size()]
-		if opp.has_method("get_grid_position"):
-			var og = opp.get_grid_position()
-			_mm_dot(og[0], og[1], col, 2)
+		var oyaw: float = opp.get("yaw") if opp.get("yaw") != null else 0.0
+		_mm_arrow(opp.position, oyaw, col, 5.0)
+
+	if player != null:
+		_mm_arrow(player.position, player.yaw, Color.CYAN, 6.5)
 
 	for box in get_tree().get_nodes_in_group("trap_boxes"):
 		var bg = game_manager.world_to_grid(box.position)
@@ -573,6 +580,40 @@ func _mm_dot(gx: int, gy: int, col: Color, radius: int) -> void:
 			var py = gy * MM_CELL + MM_CELL / 2 + dy
 			if px >= 0 and px < w and py >= 0 and py < h:
 				_mm_image.set_pixel(px, py, col)
+
+# Draw a player as a triangle pointing in their facing direction. Position comes
+# from the world transform (sub-cell precision); facing from yaw. Player forward
+# in world is (-sin(yaw), -cos(yaw)) on the (x, z) plane, which maps directly to
+# the minimap's (x, y) axes.
+func _mm_arrow(wpos: Vector3, yaw: float, col: Color, size: float) -> void:
+	var w := _mm_image.get_width(); var h := _mm_image.get_height()
+	var cs: float = Config.CELL_SIZE
+	var c  := Vector2((wpos.x / cs) * MM_CELL, (wpos.z / cs) * MM_CELL)
+	var d  := Vector2(-sin(yaw), -cos(yaw))
+	if d.length() < 0.001: d = Vector2(0, -1)
+	d = d.normalized()
+	var perp  := Vector2(-d.y, d.x)
+	var tip   := c + d * size
+	var back  := c - d * (size * 0.55)
+	var left  := back + perp * (size * 0.62)
+	var right := back - perp * (size * 0.62)
+	var minx := int(floor(min(tip.x, min(left.x, right.x))))
+	var maxx := int(ceil( max(tip.x, max(left.x, right.x))))
+	var miny := int(floor(min(tip.y, min(left.y, right.y))))
+	var maxy := int(ceil( max(tip.y, max(left.y, right.y))))
+	for py in range(miny, maxy + 1):
+		for px in range(minx, maxx + 1):
+			if px < 0 or px >= w or py < 0 or py >= h: continue
+			if _point_in_tri(Vector2(px + 0.5, py + 0.5), tip, left, right):
+				_mm_image.set_pixel(px, py, col)
+
+func _point_in_tri(p: Vector2, a: Vector2, b: Vector2, c: Vector2) -> bool:
+	var d1: float = (p.x - b.x) * (a.y - b.y) - (a.x - b.x) * (p.y - b.y)
+	var d2: float = (p.x - c.x) * (b.y - c.y) - (b.x - c.x) * (p.y - c.y)
+	var d3: float = (p.x - a.x) * (c.y - a.y) - (c.x - a.x) * (p.y - a.y)
+	var has_neg: bool = d1 < 0.0 or d2 < 0.0 or d3 < 0.0
+	var has_pos: bool = d1 > 0.0 or d2 > 0.0 or d3 > 0.0
+	return not (has_neg and has_pos)
 
 # ── Exit / leave-match ─────────────────────────────────────────────────────────
 func _build_exit_button() -> void:
@@ -759,6 +800,12 @@ func _build_mobile_buttons() -> void:
 	if player == null: return
 	if not _is_mobile_device(): return
 
+	# On touch-capable laptops the device reports as "touch" (so player.gd ignores
+	# the mouse), yet the user may still drive the on-screen controls with a mouse
+	# or trackpad. Emulating touch from the mouse lets a click+drag on the fire
+	# button both fire AND turn — exactly the same code path as a real finger.
+	Input.set_emulate_touch_from_mouse(true)
+
 	const FSZ := 92.0    # fire button diameter (smaller — less screen clutter)
 	const TSZ :=  68.0   # trap button diameter
 	const MG  :=  20     # screen-edge margin
@@ -776,21 +823,31 @@ func _build_mobile_buttons() -> void:
 	_joy_knob_nd = _circle_panel(_JOY_KNOB, Color(0.72, 0.74, 0.80, 0.72), Color(1.0, 1.0, 1.0, 0.88), 2)
 	add_child(_joy_knob_nd)
 
-	# FIRE button — gun icon, centred at 30% from left
-	_fire_nd = _action_image_button(FSZ, "res://assets/icons/icon_gun.svg")
+	# FIRE button — bullet icon, centred at 75% from left
+	_fire_nd = _action_image_button(FSZ, "res://assets/icons/icon_bullet.svg")
 	_fire_nd.anchor_left   = 0.75; _fire_nd.anchor_right  = 0.75
 	_fire_nd.anchor_top    = ACT_ANCHOR; _fire_nd.anchor_bottom = ACT_ANCHOR
 	_fire_nd.offset_left   = -FSZ * 0.5; _fire_nd.offset_right  = FSZ * 0.5
 	_fire_nd.offset_top    = -FSZ * 0.5; _fire_nd.offset_bottom = FSZ * 0.5
 	add_child(_fire_nd)
 
-	# TRAP button — bomb icon, above fire button, same right edge
+	# TRAP button — bomb icon, right edge column
 	_trap_nd = _action_image_button(TSZ, "res://assets/icons/icon_bomb.svg")
 	_trap_nd.anchor_left   = 1.0; _trap_nd.anchor_right  = 1.0
 	_trap_nd.anchor_top    = ACT_ANCHOR; _trap_nd.anchor_bottom = ACT_ANCHOR
 	_trap_nd.offset_left   = -(TSZ + MG); _trap_nd.offset_right  = -MG
 	_trap_nd.offset_top    = -(FSZ * 0.5 + MG + TSZ); _trap_nd.offset_bottom = -(FSZ * 0.5 + MG)
 	add_child(_trap_nd)
+
+	# SWITCH GUN button — above trap button, same right column
+	const SGZ := 56.0
+	_switch_gun_nd = _action_image_button(SGZ, "res://assets/icons/icon_gun.svg")
+	_switch_gun_nd.anchor_left   = 1.0; _switch_gun_nd.anchor_right  = 1.0
+	_switch_gun_nd.anchor_top    = ACT_ANCHOR; _switch_gun_nd.anchor_bottom = ACT_ANCHOR
+	_switch_gun_nd.offset_left   = -(SGZ + MG); _switch_gun_nd.offset_right  = -MG
+	_switch_gun_nd.offset_top    = -(FSZ * 0.5 + MG + TSZ + MG + SGZ)
+	_switch_gun_nd.offset_bottom = -(FSZ * 0.5 + MG + TSZ + MG)
+	add_child(_switch_gun_nd)
 
 # Mic mute/unmute toggle. Built for every multiplayer client (desktop + mobile
 # web), not just touch — on desktop you can also press V. Placed on the mid-left
@@ -876,99 +933,165 @@ func _set_hearts(box: HBoxContainer, count: int, px: float) -> void:
 		box.add_child(tr)
 
 # ── Inventory bar (bottom centre, always visible) ────────────────────────────
+var _select_btn:      Button      = null
+var _active_icon:     TextureRect = null   # gun icon (right half of preview)
+var _active_label:    Label       = null   # trap name (left half of preview)
+var _active_trap_dot: ColorRect   = null   # trap colour dot (left half)
+var _weapon_wheel:    WeaponWheel = null
+var _wheel_open_by_key: bool      = false
+
 func _build_inventory_bar() -> void:
 	if player == null: return
 
-	const SZ    := 72.0   # slot size
-	const GAP   := 8.0    # gap between slots
-	const MG    := 30.0   # bottom margin (above hint label)
-	const TOTAL := SZ * 3 + GAP * 2   # 232 px
+	const BTN_SIZE := 90.0
+	const MG := 30.0   # bottom margin (above hint label)
 
 	_inv_bar = Control.new()
 	_inv_bar.anchor_left   = 0.5; _inv_bar.anchor_right  = 0.5
 	_inv_bar.anchor_top    = 1.0; _inv_bar.anchor_bottom = 1.0
-	_inv_bar.offset_left   = -TOTAL * 0.5
-	_inv_bar.offset_right  =  TOTAL * 0.5
-	_inv_bar.offset_top    = -(SZ + MG)
+	_inv_bar.offset_left   = -BTN_SIZE * 0.5
+	_inv_bar.offset_right  =  BTN_SIZE * 0.5
+	_inv_bar.offset_top    = -(BTN_SIZE + MG)
 	_inv_bar.offset_bottom = -MG
 	add_child(_inv_bar)
 
-	_inv_slots.clear()
-	for i in 3:
-		var btn = Button.new()
-		btn.position = Vector2(i * (SZ + GAP), 0)
-		btn.size     = Vector2(SZ, SZ)
-		btn.flat     = true
+	_select_btn = Button.new()
+	_select_btn.text = "Select"
+	_select_btn.position = Vector2(0, 0)
+	_select_btn.size     = Vector2(BTN_SIZE, BTN_SIZE)
+	_select_btn.pressed.connect(_open_wheel)
+	_build_button_style(_select_btn)
+	_inv_bar.add_child(_select_btn)
 
-		var sb = StyleBoxFlat.new()
-		sb.bg_color = Color(0.05, 0.05, 0.10, 0.80)
-		sb.border_color = Color(0.4, 0.4, 0.4, 0.80)
-		sb.set_border_width_all(2)
-		sb.set_corner_radius_all(6)
-		btn.add_theme_stylebox_override("normal",  sb)
-		btn.add_theme_stylebox_override("hover",   sb)
-		btn.add_theme_stylebox_override("pressed", sb)
-		btn.add_theme_stylebox_override("focus",   StyleBoxEmpty.new())
+	# Active-item preview above button: left = trap, right = gun
+	const PREVIEW_H := 52.0
+	const HALF      := BTN_SIZE * 0.5
+	var preview_panel := Control.new()
+	preview_panel.position = Vector2(0, -(PREVIEW_H + 6))
+	preview_panel.size     = Vector2(BTN_SIZE, PREVIEW_H)
+	preview_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_inv_bar.add_child(preview_panel)
 
-		var num_lbl = Label.new()
-		num_lbl.text = str(i + 1)
-		num_lbl.add_theme_font_size_override("font_size", 10)
-		num_lbl.add_theme_color_override("font_color", Color(0.55, 0.55, 0.55))
-		num_lbl.position = Vector2(4, 2)
-		num_lbl.size     = Vector2(20, 16)
-		num_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		btn.add_child(num_lbl)
+	# Background panel
+	var pp_bg := PanelContainer.new()
+	pp_bg.set_anchors_preset(Control.PRESET_FULL_RECT)
+	pp_bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var pp_sb := StyleBoxFlat.new()
+	pp_sb.bg_color = Color(0.04, 0.04, 0.08, 0.78)
+	pp_sb.set_border_width_all(1); pp_sb.border_color = Color(0.35, 0.35, 0.4, 0.6)
+	pp_sb.set_corner_radius_all(6)
+	pp_bg.add_theme_stylebox_override("panel", pp_sb)
+	preview_panel.add_child(pp_bg)
 
-		var lbl = Label.new()
-		lbl.text = "-"
-		lbl.add_theme_font_size_override("font_size", 11)
-		lbl.add_theme_color_override("font_color", Color.GRAY)
-		lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		lbl.vertical_alignment   = VERTICAL_ALIGNMENT_CENTER
-		lbl.set_anchors_preset(Control.PRESET_FULL_RECT)
-		lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		btn.add_child(lbl)
+	# Vertical divider between trap (left) and gun (right)
+	var divider := ColorRect.new()
+	divider.color = Color(0.45, 0.45, 0.55, 0.45)
+	divider.position = Vector2(HALF - 1, 5)
+	divider.size = Vector2(2, PREVIEW_H - 10)
+	divider.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	preview_panel.add_child(divider)
 
-		var slot_idx := i
-		btn.pressed.connect(func(): player.active_trap_slot = slot_idx)
+	# Trap section – left half: coloured dot + name
+	_active_trap_dot = ColorRect.new()
+	_active_trap_dot.size = Vector2(10, 10)
+	_active_trap_dot.position = Vector2(6, 8)
+	_active_trap_dot.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_active_trap_dot.visible = false
+	preview_panel.add_child(_active_trap_dot)
 
-		_inv_bar.add_child(btn)
-		_inv_slots.append({ "sb": sb, "lbl": lbl })
+	_active_label = Label.new()
+	_active_label.position = Vector2(2, 20)
+	_active_label.size = Vector2(HALF - 4, PREVIEW_H - 22)
+	_active_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_active_label.vertical_alignment   = VERTICAL_ALIGNMENT_CENTER
+	_active_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_active_label.add_theme_font_size_override("font_size", 11)
+	_active_label.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.8))
+	_active_label.add_theme_constant_override("shadow_offset_x", 1)
+	_active_label.add_theme_constant_override("shadow_offset_y", 1)
+	_active_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_active_label.visible = false
+	preview_panel.add_child(_active_label)
+
+	# Gun section – right half: gun icon
+	_active_icon = TextureRect.new()
+	_active_icon.expand_mode  = TextureRect.EXPAND_FIT_WIDTH_PROPORTIONAL
+	_active_icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	_active_icon.position = Vector2(HALF + 2, 4)
+	_active_icon.size = Vector2(HALF - 6, PREVIEW_H - 8)
+	_active_icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_active_icon.visible = false
+	preview_panel.add_child(_active_icon)
+
+	# Weapon wheel overlay
+	_weapon_wheel = WeaponWheel.new()
+	_weapon_wheel.player = player
+	_weapon_wheel.slot_selected.connect(_on_wheel_slot_selected)
+	add_child(_weapon_wheel)
+
+func _build_button_style(btn: Button) -> void:
+	btn.flat = false
+	var sb = StyleBoxFlat.new()
+	sb.bg_color = Color(0.05, 0.05, 0.10, 0.80)
+	sb.border_color = Color(0.4, 0.4, 0.4, 0.80)
+	sb.set_border_width_all(2)
+	sb.set_corner_radius_all(6)
+	btn.add_theme_stylebox_override("normal", sb)
+	btn.add_theme_stylebox_override("hover", sb)
+	btn.add_theme_stylebox_override("pressed", sb)
+	btn.add_theme_stylebox_override("focus", StyleBoxEmpty.new())
+	btn.add_theme_font_size_override("font_size", 16)
+
+func _open_wheel() -> void:
+	if _weapon_wheel == null or not game_manager.is_playing: return
+	if _weapon_wheel.visible:
+		_weapon_wheel.close(false)
+	else:
+		_weapon_wheel.open()
+
+func _on_wheel_slot_selected(is_gun: bool, slot_idx: int) -> void:
+	if player == null: return
+	if is_gun:
+		player.active_gun_slot = slot_idx
+		player._rebuild_viewmodel()
+	else:
+		player.active_trap_slot = slot_idx
 
 func _update_inventory_bar() -> void:
-	if _inv_bar == null or player == null: return
+	if _select_btn == null or player == null:
+		return
+	if _weapon_wheel != null and _weapon_wheel.visible and not game_manager.is_playing:
+		_weapon_wheel.close(false)
 
-	for i in 3:
-		var slot   = _inv_slots[i]
-		var sb: StyleBoxFlat = slot["sb"]
-		var lbl: Label       = slot["lbl"]
-		var trap_type: int   = player.trap_inventory[i]
-		var is_active: bool  = (i == player.active_trap_slot)
-
-		if trap_type >= 0:
-			var col: Color = Config.TRAP_COLORS[trap_type]
-			lbl.text = Config.TRAP_NAMES[trap_type]
-			if is_active:
-				lbl.add_theme_color_override("font_color", col.lightened(0.25))
-				sb.border_color = Color(1.0, 0.95, 0.25, 1.0)
-				sb.set_border_width_all(3)
-				sb.bg_color = Color(col.r * 0.28, col.g * 0.28, col.b * 0.28, 0.92)
-			else:
-				lbl.add_theme_color_override("font_color", col.darkened(0.25))
-				sb.border_color = Color(0.45, 0.45, 0.45, 0.80)
-				sb.set_border_width_all(2)
-				sb.bg_color = Color(0.05, 0.05, 0.10, 0.80)
+	# Active-item preview: gun (right) and trap (left) shown simultaneously
+	if _active_icon != null and _active_label != null and _active_trap_dot != null:
+		var gtype: int = player.gun_type
+		var htrap: int = player.held_trap
+		# Gun side (right half)
+		if gtype >= 0 and gtype < GUN_ICONS.size():
+			_active_icon.texture = load(GUN_ICONS[gtype])
+			_active_icon.visible = true
 		else:
-			lbl.text = "-"
-			lbl.add_theme_color_override("font_color", Color(0.38, 0.38, 0.38))
-			if is_active:
-				sb.border_color = Color(0.65, 0.65, 0.65, 0.90)
-				sb.set_border_width_all(3)
-				sb.bg_color = Color(0.10, 0.10, 0.15, 0.85)
-			else:
-				sb.border_color = Color(0.32, 0.32, 0.32, 0.70)
-				sb.set_border_width_all(2)
-				sb.bg_color = Color(0.05, 0.05, 0.10, 0.80)
+			_active_icon.texture = null
+			_active_icon.visible = false
+		# Trap side (left half)
+		if htrap >= 0:
+			var tcol: Color = Config.TRAP_COLORS.get(htrap, Color.WHITE)
+			_active_trap_dot.color = tcol
+			_active_trap_dot.visible = true
+			_active_label.text = Config.TRAP_NAMES.get(htrap, "?")
+			_active_label.add_theme_color_override("font_color", tcol.lightened(0.4))
+			_active_label.visible = true
+		else:
+			_active_trap_dot.visible = false
+			_active_label.visible = false
+
+	# Keep switch-gun touch button icon in sync with equipped gun
+	if _switch_gun_nd != null:
+		var tr = _switch_gun_nd.get_child(0) as TextureRect
+		if tr:
+			var icon_path: String = GUN_ICONS[player.gun_type] if player.gun_type >= 0 else "res://assets/icons/icon_gun.svg"
+			tr.texture = load(icon_path)
 
 func _circle_panel(size: float, fill: Color, border: Color, bw: int) -> Panel:
 	var p = Panel.new()
@@ -1051,12 +1174,20 @@ func _on_peer_disconnected_notif(pid: int) -> void:
 # ── Input ─────────────────────────────────────────────────────────────────────
 func _input(event: InputEvent) -> void:
 	# Keyboard shortcuts (always active)
-	if event is InputEventKey and event.pressed and not event.echo:
-		if event.keycode == KEY_R:
+	if event is InputEventKey and not event.echo:
+		if event.keycode == KEY_R and event.pressed:
 			get_tree().reload_current_scene()
-		elif event.keycode == KEY_ESCAPE:
-			# Open the leave-match confirmation instead of quitting outright.
+		elif event.keycode == KEY_ESCAPE and event.pressed:
 			_on_exit_pressed()
+		elif event.keycode == KEY_G:
+			# Hold G to open wheel, release to close & apply
+			if event.pressed and _weapon_wheel != null and not _weapon_wheel.visible:
+				_wheel_open_by_key = true
+				_open_wheel()
+			elif not event.pressed and _wheel_open_by_key:
+				_wheel_open_by_key = false
+				if _weapon_wheel != null and _weapon_wheel.visible:
+					_weapon_wheel.close(true)
 
 	# Touch controls
 	if not _is_mobile_device(): return
@@ -1082,6 +1213,7 @@ func _input(event: InputEvent) -> void:
 			if pos.x >= vp_hw:
 				if _fire_nd != null and _fire_nd.get_global_rect().has_point(pos) and _fire_id == -1:
 					_fire_id = event.index
+					_look_prev_fire = pos   # seed drag tracking for turn-while-firing
 					_fire_nd.modulate = Color(1.5, 1.5, 1.5)
 					player._fire_gun()
 					get_viewport().set_input_as_handled()
@@ -1090,6 +1222,12 @@ func _input(event: InputEvent) -> void:
 					_trap_id = event.index
 					_trap_nd.modulate = Color(1.5, 1.5, 1.5)
 					player._try_place()
+					get_viewport().set_input_as_handled()
+					return
+				if _switch_gun_nd != null and _switch_gun_nd.get_global_rect().has_point(pos) and _switch_gun_id == -1:
+					_switch_gun_id = event.index
+					_switch_gun_nd.modulate = Color(1.5, 1.5, 1.5)
+					_open_wheel()
 					get_viewport().set_input_as_handled()
 					return
 				if _look_id == -1:
@@ -1115,6 +1253,10 @@ func _input(event: InputEvent) -> void:
 				_trap_id = -1
 				if _trap_nd: _trap_nd.modulate = Color(1, 1, 1)
 				get_viewport().set_input_as_handled()
+			elif event.index == _switch_gun_id:
+				_switch_gun_id = -1
+				if _switch_gun_nd: _switch_gun_nd.modulate = Color(1, 1, 1)
+				get_viewport().set_input_as_handled()
 
 	elif event is InputEventScreenDrag:
 		var drag := event as InputEventScreenDrag
@@ -1135,6 +1277,17 @@ func _input(event: InputEvent) -> void:
 			var dx := clampf(drag.position.x - _look_prev.x, -60.0, 60.0)
 			var dy := clampf(drag.position.y - _look_prev.y, -60.0, 60.0)
 			_look_prev = drag.position
+			player._pending_yaw_delta -= dx * sens
+			player.pitch = clamp(player.pitch - dy * sens, -PI / 3.0, PI / 3.0)
+			if player.camera_node:
+				player.camera_node.rotation.x = player.pitch
+			get_viewport().set_input_as_handled()
+		elif event.index == _fire_id:
+			# Dragging while holding fire button turns the camera (fire-to-turn)
+			var sens: float = player.mouse_sensitivity * 2.6
+			var dx := clampf(drag.position.x - _look_prev_fire.x, -60.0, 60.0)
+			var dy := clampf(drag.position.y - _look_prev_fire.y, -60.0, 60.0)
+			_look_prev_fire = drag.position
 			player._pending_yaw_delta -= dx * sens
 			player.pitch = clamp(player.pitch - dy * sens, -PI / 3.0, PI / 3.0)
 			if player.camera_node:
