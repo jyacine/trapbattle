@@ -114,15 +114,24 @@ func _process(_dt: float) -> void:
 		_update_center_label()
 		queue_redraw()
 
-func _gui_input(event: InputEvent) -> void:
+func _input(event: InputEvent) -> void:
 	if not visible: return
-	if event is InputEventMouseButton and event.pressed:
-		match event.button_index:
-			MOUSE_BUTTON_LEFT:
-				close(true)
-			MOUSE_BUTTON_RIGHT:
-				close(false)
-		get_viewport().set_input_as_handled()
+	if not (event is InputEventMouseButton) or not event.pressed: return
+	if event.button_index == MOUSE_BUTTON_LEFT:
+		# Re-derive the hovered slot from the exact click position so there is
+		# no one-frame lag between mouse move and click.
+		var mouse: Vector2 = get_viewport().get_mouse_position()
+		var c    : Vector2 = size * 0.5
+		var d    : Vector2 = mouse - c
+		var dist : float   = d.length()
+		if dist >= INNER_R and dist <= OUTER_R:
+			_hovered = _angle_to_slot(atan2(d.y, d.x))
+		else:
+			_hovered = -1
+		close(true)
+	elif event.button_index == MOUSE_BUTTON_RIGHT:
+		close(false)
+	get_viewport().set_input_as_handled()
 
 # ── Drawing ───────────────────────────────────────────────────────────────────
 func _draw() -> void:

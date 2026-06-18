@@ -194,9 +194,7 @@ func _build_hud() -> void:
 
 	_trap_label = _make_label("", 10, 44, 18, Color.WHITE)
 	add_child(_trap_label)
-
-	_gun_label = _make_label("", 10, 72, 17, Color(0.3, 1.0, 0.3))
-	add_child(_gun_label)
+	# _gun_label intentionally omitted — active weapon shown on the Select button
 
 	_effects_label = _make_label("", 10, 0, 17, Color(0.8, 1.0, 0.8))
 	_effects_label.anchor_top    = 1.0; _effects_label.anchor_bottom = 1.0
@@ -511,18 +509,7 @@ func _update_hud() -> void:
 		if _trap_nd != null:
 			_trap_nd.modulate = Color(1, 1, 1, 0.40)
 
-	if player.gun_type >= 0:
-		var gun_name = Config.GUN_NAMES[player.gun_type]
-		var ammo_str = str(player.gun_ammo) if player.gun_ammo >= 0 else "~"
-		if player._gun_cooldown > 0.0:
-			_gun_label.text = "Gun: [%s %s] %.1fs" % [gun_name, ammo_str, player._gun_cooldown]
-			_gun_label.add_theme_color_override("font_color", Color(0.8, 0.5, 0.2))
-		else:
-			_gun_label.text = "Gun: [%s %s]  READY  (LMB/TAB)" % [gun_name, ammo_str]
-			_gun_label.add_theme_color_override("font_color", Color(0.3, 1.0, 0.3))
-	else:
-		_gun_label.text = "No gun  (walk over a blue glowing box)"
-		_gun_label.add_theme_color_override("font_color", Color.GRAY)
+	# (gun state now shown on the Select button instead of a HUD label)
 
 	var fx_text = ""
 	for eff in game_manager.effects.get(pid, {}).keys():
@@ -796,8 +783,8 @@ func _build_mobile_buttons() -> void:
 	_joy_knob_nd = _circle_panel(_JOY_KNOB, Color(0.72, 0.74, 0.80, 0.72), Color(1.0, 1.0, 1.0, 0.88), 2)
 	add_child(_joy_knob_nd)
 
-	# FIRE button — gun icon, centred at 75% from left
-	_fire_nd = _action_image_button(FSZ, "res://assets/icons/icon_gun.svg")
+	# FIRE button — bullet icon, centred at 75% from left
+	_fire_nd = _action_image_button(FSZ, "res://assets/icons/icon_bullet.svg")
 	_fire_nd.anchor_left   = 0.75; _fire_nd.anchor_right  = 0.75
 	_fire_nd.anchor_top    = ACT_ANCHOR; _fire_nd.anchor_bottom = ACT_ANCHOR
 	_fire_nd.offset_left   = -FSZ * 0.5; _fire_nd.offset_right  = FSZ * 0.5
@@ -906,9 +893,11 @@ func _set_hearts(box: HBoxContainer, count: int, px: float) -> void:
 		box.add_child(tr)
 
 # ── Inventory bar (bottom centre, always visible) ────────────────────────────
-var _select_btn: Button = null   # single wheel-open button (replaces old Traps + Gun)
-var _weapon_wheel: WeaponWheel = null
-var _wheel_open_by_key: bool = false
+var _select_btn:    Button      = null
+var _active_icon:   TextureRect = null   # gun icon shown above Select
+var _active_label:  Label       = null   # trap name shown above Select (when no gun)
+var _weapon_wheel:  WeaponWheel = null
+var _wheel_open_by_key: bool    = false
 
 func _build_inventory_bar() -> void:
 	if player == null: return
@@ -932,6 +921,37 @@ func _build_inventory_bar() -> void:
 	_select_btn.pressed.connect(_open_wheel)
 	_build_button_style(_select_btn)
 	_inv_bar.add_child(_select_btn)
+
+	# Active-item indicator: gun icon or trap name shown just above the button
+	const PREVIEW_H := 52.0
+	var preview_panel := PanelContainer.new()
+	preview_panel.position = Vector2(0, -(PREVIEW_H + 6))
+	preview_panel.size     = Vector2(BTN_SIZE, PREVIEW_H)
+	var pp_sb := StyleBoxFlat.new()
+	pp_sb.bg_color = Color(0.04, 0.04, 0.08, 0.78)
+	pp_sb.set_border_width_all(1); pp_sb.border_color = Color(0.35, 0.35, 0.4, 0.6)
+	pp_sb.set_corner_radius_all(6)
+	preview_panel.add_theme_stylebox_override("panel", pp_sb)
+	_inv_bar.add_child(preview_panel)
+
+	_active_icon = TextureRect.new()
+	_active_icon.expand_mode  = TextureRect.EXPAND_FIT_WIDTH_PROPORTIONAL
+	_active_icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	_active_icon.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_active_icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	preview_panel.add_child(_active_icon)
+
+	_active_label = Label.new()
+	_active_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_active_label.vertical_alignment   = VERTICAL_ALIGNMENT_CENTER
+	_active_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_active_label.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_active_label.add_theme_font_size_override("font_size", 12)
+	_active_label.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.8))
+	_active_label.add_theme_constant_override("shadow_offset_x", 1)
+	_active_label.add_theme_constant_override("shadow_offset_y", 1)
+	_active_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	preview_panel.add_child(_active_label)
 
 	# Weapon wheel overlay
 	_weapon_wheel = WeaponWheel.new()
@@ -972,6 +992,25 @@ func _update_inventory_bar() -> void:
 		return
 	if _weapon_wheel != null and _weapon_wheel.visible and not game_manager.is_playing:
 		_weapon_wheel.close(false)
+
+	# Active-item preview above Select button
+	if _active_icon != null and _active_label != null:
+		var gtype: int = player.gun_type
+		var htrap: int = player.held_trap
+		if gtype >= 0 and gtype < GUN_ICONS.size():
+			_active_icon.texture = load(GUN_ICONS[gtype])
+			_active_icon.visible = true
+			_active_label.visible = false
+		elif htrap >= 0:
+			_active_icon.visible = false
+			_active_label.text = Config.TRAP_NAMES.get(htrap, "?")
+			_active_label.add_theme_color_override("font_color",
+				Config.TRAP_COLORS.get(htrap, Color.WHITE))
+			_active_label.visible = true
+		else:
+			_active_icon.visible  = false
+			_active_label.visible = false
+
 	# Keep switch-gun touch button icon in sync with equipped gun
 	if _switch_gun_nd != null:
 		var tr = _switch_gun_nd.get_child(0) as TextureRect
@@ -1106,7 +1145,7 @@ func _input(event: InputEvent) -> void:
 				if _trap_nd != null and _trap_nd.get_global_rect().has_point(pos) and _trap_id == -1:
 					_trap_id = event.index
 					_trap_nd.modulate = Color(1.5, 1.5, 1.5)
-					_open_wheel()
+					player._try_place()
 					get_viewport().set_input_as_handled()
 					return
 				if _switch_gun_nd != null and _switch_gun_nd.get_global_rect().has_point(pos) and _switch_gun_id == -1:
