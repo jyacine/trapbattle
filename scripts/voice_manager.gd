@@ -18,11 +18,11 @@ class_name VoiceManager
 
 signal player_speaking_changed(pid: int, is_speaking: bool)
 
-const VOICE_RATE      := 16000   # send/playback rate — wideband voice (8 kHz band), clear
+const VOICE_RATE      := 24000   # send/playback rate — wideband voice (12 kHz band), clearer
 const SEND_INTERVAL   := 0.02    # seconds between audio packets
 const SPEAKING_TIMEOUT := 0.30   # silence after last packet → "stopped speaking"
-const VAD_THRESHOLD   := 0.010   # mic RMS above this counts as speech (favor transmitting)
-const VAD_HANGOVER    := 0.20    # keep transmitting this long after speech dips
+const VAD_THRESHOLD   := 0.009   # mic RMS above this counts as speech (favor transmitting)
+const VAD_HANGOVER    := 0.25    # keep transmitting this long after speech dips (smoother tails)
 const MIC_BUS         := "VoiceMic"
 
 # ── Jitter buffer (fixes choppy playback) ────────────────────────────────────
@@ -85,6 +85,14 @@ var _local_speaking: bool = false    # current VAD state for the local mic
 # writes the current predictor/index into its header so the decoder stays in sync).
 var _enc_predictor: int = 0
 var _enc_index:     int = 0
+
+# Streaming resampler state. The mic is read in ~20 ms chunks; resampling each
+# chunk independently (the old code) dropped a fractional sample and reset the
+# averaging window at every chunk boundary, injecting a ~50 Hz buzz/roughness.
+# We instead keep a continuous source buffer + fractional read cursor so the
+# resample timeline never breaks across chunks.
+var _rs_in:  PackedFloat32Array = PackedFloat32Array()  # unconsumed source samples
+var _rs_pos: float = 0.0                                 # fractional cursor into _rs_in
 
 # peer_id → AudioStreamGeneratorPlayback  (remote voices)
 var _speakers:      Dictionary = {}
@@ -194,10 +202,11 @@ func mute() -> void:
 
 func unmute() -> void:
 	_transmitting = true
-	# Start the ADPCM stream fresh so the first packet after un-muting doesn't carry
-	# a stale predictor from before. Stays silent on the network until VAD fires.
+	# Start the ADPCM stream + resampler fresh so the first packet after un-muting
+	# doesn't carry stale state. Stays silent on the network until VAD fires.
 	_enc_predictor = 0
 	_enc_index     = 0
+	_resample_reset()
 	_update_button()
 
 # Kept for backward compat (UIManager button wired these up before)
@@ -239,12 +248,18 @@ func _capture_and_send() -> void:
 	if speaking != _local_speaking:
 		_local_speaking = speaking
 		player_speaking_changed.emit(multiplayer.get_unique_id(), speaking)
+		if speaking:
+			# New speech segment: reset the codec + resampler so it starts clean (no
+			# stale predictor click, no discontinuity carried from the previous burst).
+			_enc_predictor = 0
+			_enc_index     = 0
+			_resample_reset()
 
 	if not speaking:
 		return   # silence — transmit nothing
 
-	# Resample capture_rate → VOICE_RATE, then 4-bit IMA-ADPCM compress.
-	var samples := _resample(frames, _capture_rate, float(VOICE_RATE))
+	# Resample capture_rate → VOICE_RATE (continuous), then 4-bit IMA-ADPCM compress.
+	var samples := _resample_stream(frames, _capture_rate, float(VOICE_RATE))
 	if samples.is_empty(): return
 	var enc := adpcm_encode(samples, _enc_predictor, _enc_index)
 	var bytes: PackedByteArray = enc["bytes"]
@@ -261,50 +276,77 @@ func _capture_and_send() -> void:
 	else:
 		_rpc_voice.rpc_id(1, bytes, my_id)
 
-# Resample mono samples (frames[i].x) from src_rate to dst_rate, returning float
-# samples in [-1, 1]. Robust to 44100 or 48000 Hz capture devices.
+# Clear the streaming resampler (call on mute/unmute and at each speech onset).
+func _resample_reset() -> void:
+	_rs_in  = PackedFloat32Array()
+	_rs_pos = 0.0
+
+# Instance wrapper: append the new mic chunk (frames[i].x) to the persistent source
+# buffer, then emit every destination sample that is now fully available, carrying
+# the unconsumed tail + fractional phase to the next call. This keeps the resample
+# timeline continuous across 20 ms chunks (no per-chunk window reset / dropped
+# fractional sample — the old code's ~50 Hz buzz source).
+func _resample_stream(frames: PackedVector2Array, src_rate: float, dst_rate: float) -> PackedFloat32Array:
+	var base := _rs_in.size()
+	_rs_in.resize(base + frames.size())
+	for i in frames.size():
+		_rs_in[base + i] = frames[i].x
+	var r := resample_stream(_rs_in, src_rate, dst_rate, _rs_pos)
+	_rs_in  = r["tail"]
+	_rs_pos = r["pos"]
+	return r["out"]
+
+# Pure streaming resampler (static → unit-testable headless). Given a buffer of
+# pending source samples, the rates, and the carried fractional cursor, returns:
+#   out:  destination samples emitted this call ([-1, 1])
+#   tail: source samples not yet consumed (carry to the next call)
+#   pos:  fractional cursor within `tail`
+# Resampling in chunks (accumulate into `tail`, feed back `pos`) yields the SAME
+# stream as one-shot resampling — that continuity is what the tests assert.
 #
-# When DOWNSAMPLING (the usual case: 44.1/48 kHz capture -> 16 kHz voice) we average
-# all source samples that fall inside each output sample's window (a box low-pass)
-# instead of point/linear sampling. Naive interpolation skips most input samples and
-# folds frequencies above the new Nyquist back into the band as harsh aliasing noise
-# — a major cause of the "bad quality". Averaging band-limits before decimation.
-# When upsampling we fall back to linear interpolation.
-func _resample(frames: PackedVector2Array, src_rate: float, dst_rate: float) -> PackedFloat32Array:
-	var n_in := frames.size()
-	if n_in == 0 or src_rate <= 0.0:
-		return PackedFloat32Array()
-	var ratio := dst_rate / src_rate
-	var n_out := int(n_in * ratio)
-	if n_out <= 0:
-		return PackedFloat32Array()
+# Downsampling (the usual 44.1/48 kHz -> 24 kHz) averages each output sample's
+# source window with FRACTIONAL edge weights — a band-limiting low-pass that
+# prevents aliasing. Upsampling uses linear interpolation.
+static func resample_stream(src: PackedFloat32Array, src_rate: float, dst_rate: float, pos: float) -> Dictionary:
 	var out := PackedFloat32Array()
-	out.resize(n_out)
-	var step := src_rate / dst_rate   # input samples per output sample
+	var n := src.size()
+	if src_rate <= 0.0 or dst_rate <= 0.0 or n == 0:
+		return { "out": out, "tail": src, "pos": pos }
+	var step := src_rate / dst_rate   # source samples per output sample
+	var p := pos
 	if step > 1.0:
-		# Downsample: average the input window [j*step, (j+1)*step) — anti-aliasing.
-		for j in n_out:
-			var start_f := float(j) * step
-			var end_f := start_f + step
-			var i0 := int(start_f)
-			var i1: int = min(int(end_f), n_in - 1)
+		# Downsample: fractional-weighted average over the window [p, p+step).
+		while p + step <= float(n):
+			var a := p
+			var b := p + step
+			var i0 := int(floor(a))
+			var i1 := int(floor(b))
 			var sum := 0.0
-			var cnt := 0
+			var wsum := 0.0
 			for i in range(i0, i1 + 1):
-				sum += frames[i].x
-				cnt += 1
-			out[j] = sum / float(max(1, cnt))
+				if i < 0 or i >= n:
+					continue
+				var lo: float = maxf(a, float(i))
+				var hi: float = minf(b, float(i + 1))
+				var w: float = hi - lo
+				if w <= 0.0:
+					continue
+				sum  += src[i] * w
+				wsum += w
+			out.append(sum / maxf(wsum, 1e-6))
+			p += step
 	else:
-		# Upsample (or 1:1): linear interpolation.
-		for j in n_out:
-			var src_pos := float(j) / ratio
-			var i0 := int(src_pos)
-			var i1: int = min(i0 + 1, n_in - 1)
-			var frac := src_pos - float(i0)
-			var f0: Vector2 = frames[i0]
-			var f1: Vector2 = frames[i1]
-			out[j] = f0.x + (f1.x - f0.x) * frac
-	return out
+		# Upsample / 1:1: linear interpolation.
+		while p + 1.0 <= float(n):
+			var i0 := int(floor(p))
+			var i1: int = mini(i0 + 1, n - 1)
+			var frac := p - float(i0)
+			out.append(src[i0] + (src[i1] - src[i0]) * frac)
+			p += step
+	# Drop fully-consumed source, keep the tail + fractional phase for next call.
+	var consumed: int = mini(int(floor(p)), n)
+	var tail: PackedFloat32Array = src.slice(consumed) if consumed > 0 else src
+	return { "out": out, "tail": tail, "pos": p - float(consumed) }
 
 # ── IMA-ADPCM codec (static + pure → unit-testable headless) ──────────────────
 # Encode float samples [-1,1] into a self-contained packet: 3-byte header
