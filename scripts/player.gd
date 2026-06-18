@@ -76,16 +76,20 @@ var _respawn_y_to:     float     = 0.0
 const RESPAWN_DROP_HEIGHT    := 9.0
 const RESPAWN_DROP_DURATION  := 1.4
 
-# ── Death replay (top-down killcam of the last moments) ───────────────────────
-const REPLAY_SECONDS := 5.0            # how much footage we keep (matches RESPAWN_DELAY)
+# ── Death replay (top-down killcam + opponent POV) ───────────────────────────
+const REPLAY_SECONDS         := 5.0   # phase 1: player POV top-down length
+const OPPONENT_VIEW_SECONDS  := 3.0   # phase 2: live opponent first-person length
 var _replay_buf_pos: Array = []        # ring buffer of recent positions (Vector3)
 var _replay_buf_yaw: Array = []        # ring buffer of recent yaw (float)
-var _replaying:      bool  = false
-var _replay_t:       float = 0.0
+var _replaying:       bool  = false
+var _replay_t:        float = 0.0     # raw seconds elapsed in current replay
+var _replay_phase:    int   = 1       # 1 = player POV, 2 = opponent POV
 var _replay_path_pos: Array = []       # snapshot played back on death
 var _replay_path_yaw: Array = []
-var _replay_cam:     Camera3D = null
-var _replay_avatar:  Node3D   = null
+var _replay_cam:      Camera3D = null
+var _replay_avatar:   Node3D   = null
+var _killer_node:     Node3D   = null  # live reference to the opponent who killed us
+var _opponent_view_banner: Label = null
 
 # ── Current grid pos ─────────────────────────────────────────────────────────
 var current_grid_pos: Array = [0, 0]
@@ -195,6 +199,19 @@ func _ready() -> void:
 		_replay_banner.visible = false
 		_replay_banner.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		death_layer.add_child(_replay_banner)
+		_opponent_view_banner = Label.new()
+		_opponent_view_banner.text = "OPPONENT VIEW"
+		_opponent_view_banner.add_theme_font_size_override("font_size", 28)
+		_opponent_view_banner.add_theme_color_override("font_color", Color(1.0, 0.80, 0.20))
+		_opponent_view_banner.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.9))
+		_opponent_view_banner.add_theme_constant_override("shadow_offset_x", 2)
+		_opponent_view_banner.add_theme_constant_override("shadow_offset_y", 2)
+		_opponent_view_banner.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		_opponent_view_banner.anchor_right = 1.0
+		_opponent_view_banner.offset_top = 78
+		_opponent_view_banner.visible = false
+		_opponent_view_banner.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		death_layer.add_child(_opponent_view_banner)
 		if not OS.has_feature("web"):
 			Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 	else:
@@ -373,8 +390,11 @@ func _input(event: InputEvent) -> void:
 				MOUSE_BUTTON_LEFT:
 					if event.pressed:
 						if Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
-							_fire_held = true
-							_fire_gun()
+							if gun_type >= 0:
+								_fire_held = true
+								_fire_gun()
+							else:
+								_try_place()   # throw trap when unarmed
 						else:
 							Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 					else:
@@ -402,9 +422,11 @@ func _input(event: InputEvent) -> void:
 
 	if event is InputEventKey and event.pressed and not event.echo:
 		match event.keycode:
-			KEY_N:      _try_place()          # place active trap
+			KEY_N:      _try_place()
+			KEY_C:      _cycle_trap_slot()    # cycle trap (also: SPACE)
+			KEY_V:      _cycle_gun_slot()     # cycle gun  (also: B)
 			KEY_TAB:    _fire_gun()
-			KEY_B:      _cycle_gun_slot()     # cycle between 2 gun slots
+			KEY_B:      _cycle_gun_slot()     # kept for backward compat
 			KEY_1:      active_trap_slot = 0
 			KEY_2:      active_trap_slot = 1
 			KEY_3:      active_trap_slot = 2
@@ -467,7 +489,13 @@ func _fire_gun() -> void:
 	if gun_ammo > 0:
 		gun_ammo -= 1
 		if gun_ammo == 0:
-			gun_inventory[active_gun_slot] = -1   # slot empty, drop it
+			gun_inventory[active_gun_slot] = -1
+			# Auto-switch to the next occupied slot so the player keeps firing
+			for i in 3:
+				var s := (active_gun_slot + i + 1) % 3
+				if gun_inventory[s] >= 0:
+					active_gun_slot = s
+					break
 			_rebuild_viewmodel()
 
 func _spawn_bullet_local(pos: Vector3, dir: Vector3) -> void:
@@ -667,8 +695,10 @@ func _start_death_replay() -> void:
 		return
 	_replay_path_pos = _replay_buf_pos.duplicate()
 	_replay_path_yaw = _replay_buf_yaw.duplicate()
-	_replaying = true
-	_replay_t  = 0.0
+	_replaying    = true
+	_replay_t     = 0.0
+	_replay_phase = 1
+	_killer_node  = null
 
 	if _viewmodel_root: _viewmodel_root.visible = false
 
@@ -686,35 +716,70 @@ func _start_death_replay() -> void:
 	if _replay_banner: _replay_banner.visible = true
 
 func _update_death_replay(delta: float) -> void:
-	var n: int = _replay_path_pos.size()
-	if n < 2 or _replay_cam == null or _replay_avatar == null:
+	if _replay_cam == null or not is_instance_valid(_replay_cam):
 		return
-	# Play the whole clip once across the respawn delay.
-	_replay_t = minf(_replay_t + delta / float(GameManager.RESPAWN_DELAY), 1.0)
-	var f: float  = _replay_t * float(n - 1)
-	var i: int    = int(f)
-	var i2: int   = mini(i + 1, n - 1)
-	var frac: float = f - float(i)
-	var pos: Vector3 = (_replay_path_pos[i] as Vector3).lerp(_replay_path_pos[i2], frac)
-	var yw: float = lerp_angle(_replay_path_yaw[i], _replay_path_yaw[i2], frac)
-	_replay_avatar.position   = pos
-	_replay_avatar.rotation.y = yw
-	# Closer, lower 3/4 overhead framing centred on the avatar (less steep than
-	# straight-down, so the action reads better).
-	_replay_cam.position = pos + Vector3(0.0, 3.8, 3.2)
-	_replay_cam.look_at(pos + Vector3(0.0, 0.9, 0.0), Vector3.UP)
+	_replay_t += delta
+
+	if _replay_phase == 1:
+		# Phase 1 (first REPLAY_SECONDS): top-down replay of the player's last moments.
+		var n: int = _replay_path_pos.size()
+		if n >= 2 and _replay_avatar != null and is_instance_valid(_replay_avatar):
+			var t_norm := minf(_replay_t / REPLAY_SECONDS, 1.0)
+			var f: float    = t_norm * float(n - 1)
+			var i: int      = int(f)
+			var i2: int     = mini(i + 1, n - 1)
+			var frac: float = f - float(i)
+			var pos: Vector3 = (_replay_path_pos[i] as Vector3).lerp(_replay_path_pos[i2] as Vector3, frac)
+			var yw: float    = lerp_angle(_replay_path_yaw[i] as float, _replay_path_yaw[i2] as float, frac)
+			_replay_avatar.position   = pos
+			_replay_avatar.rotation.y = yw
+			_replay_cam.position = pos + Vector3(0.0, 3.8, 3.2)
+			_replay_cam.look_at(pos + Vector3(0.0, 0.9, 0.0), Vector3.UP)
+		if _replay_t >= REPLAY_SECONDS:
+			_begin_opponent_view()
+
+	elif _replay_phase == 2:
+		# Phase 2 (next OPPONENT_VIEW_SECONDS): live first-person view from the killer.
+		if _killer_node != null and is_instance_valid(_killer_node):
+			var k: Player = _killer_node as Player
+			_replay_cam.position = k.position + Vector3(0.0, 1.6, 0.0)
+			# pitch is only known for the local player; remote opponents report 0 (not synced)
+			_replay_cam.rotation = Vector3(k.pitch if k.is_local else 0.0, k.yaw, 0.0)
+
+func _begin_opponent_view() -> void:
+	if _replay_phase == 2:
+		return   # guard: already switched
+	# Find the opponent who killed us.
+	var killer_pid: int = game_manager._last_damager.get(peer_id, -1)
+	_killer_node = null
+	if killer_pid >= 0 and killer_pid != peer_id:
+		for p in get_tree().get_nodes_in_group("players"):
+			if p is Player and (p as Player).peer_id == killer_pid:
+				_killer_node = p as Player
+				break
+	if _killer_node == null:
+		return   # self-kill or no killer found — hold the last phase-1 frame
+	_replay_phase = 2
+	if _replay_avatar != null and is_instance_valid(_replay_avatar):
+		_replay_avatar.queue_free()
+		_replay_avatar = null
+	if _replay_banner:        _replay_banner.visible        = false
+	if _opponent_view_banner: _opponent_view_banner.visible = true
 
 func _end_death_replay() -> void:
-	_replaying = false
+	_replaying    = false
+	_replay_phase = 1
+	_killer_node  = null
 	if is_instance_valid(_replay_cam):    _replay_cam.queue_free()
 	if is_instance_valid(_replay_avatar): _replay_avatar.queue_free()
-	_replay_cam = null
+	_replay_cam    = null
 	_replay_avatar = null
 	if camera_node: camera_node.current = true
 	if _viewmodel_root: _viewmodel_root.visible = (gun_type >= 0)
-	if _letterbox_top: _letterbox_top.visible = false
-	if _letterbox_bot: _letterbox_bot.visible = false
-	if _replay_banner: _replay_banner.visible = false
+	if _letterbox_top:         _letterbox_top.visible         = false
+	if _letterbox_bot:         _letterbox_bot.visible         = false
+	if _replay_banner:         _replay_banner.visible         = false
+	if _opponent_view_banner:  _opponent_view_banner.visible  = false
 	_replay_path_pos.clear()
 	_replay_path_yaw.clear()
 	# Start recording fresh from the new spawn so a quick re-death never replays

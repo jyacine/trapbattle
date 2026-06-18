@@ -183,9 +183,9 @@ func _process(delta: float) -> void:
 	# Drain the jitter buffers into the audio generators at a steady depth.
 	_pump_speakers()
 
-# ── Keyboard toggle (V = mute / unmute) ──────────────────────────────────────
+# ── Keyboard toggle (M = mute / unmute; V is now cycle-gun in player.gd) ────
 func _input(event: InputEvent) -> void:
-	if event is InputEventKey and event.keycode == KEY_V \
+	if event is InputEventKey and event.keycode == KEY_M \
 			and event.pressed and not event.echo:
 		if _transmitting:
 			mute()
