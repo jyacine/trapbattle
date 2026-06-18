@@ -29,7 +29,7 @@ func _make_sine(n: int, freq: float, rate: float, amp: float) -> PackedFloat32Ar
 
 func _init() -> void:
 	var n := 800
-	var rate := float(VoiceManager.VOICE_RATE)   # 8000
+	var rate := float(VoiceManager.VOICE_RATE)   # voice send/playback rate
 	var sig := _make_sine(n, 220.0, rate, 0.5)
 
 	var enc := VoiceManager.adpcm_encode(sig, 0, 0)
@@ -64,6 +64,8 @@ func _init() -> void:
 	err2 /= float(max(1, m2))
 	_check(err2 < 0.06, "second packet decodes standalone (err %.4f)" % err2)
 
+	_test_resampler_continuity()
+
 	var summary := "ALL TESTS PASSED" if _failures == 0 else ("%d TEST(S) FAILED" % _failures)
 	_lines.append(summary)
 	var report := "\n".join(_lines)
@@ -75,3 +77,47 @@ func _init() -> void:
 		f.close()
 
 	quit(0 if _failures == 0 else 1)
+
+# Streaming resampler: feeding the source in 20 ms chunks (the live mic path) must
+# produce the SAME output stream as resampling it all in one shot. This is the core
+# guarantee that fixed the per-chunk discontinuity ("buzz"). Also checks the chunked
+# output has no abrupt sample jumps a continuous resampler wouldn't make.
+func _test_resampler_continuity() -> void:
+	var src_rate := 44100.0
+	var dst_rate := float(VoiceManager.VOICE_RATE)
+	var sig := _make_sine(44100, 440.0, src_rate, 0.5)   # 1 s tone
+
+	# One-shot reference.
+	var one := VoiceManager.resample_stream(sig, src_rate, dst_rate, 0.0)
+	var full: PackedFloat32Array = one["out"]
+
+	# Chunked (simulate ~20 ms mic reads), carrying tail + cursor between calls.
+	var chunked := PackedFloat32Array()
+	var buf := PackedFloat32Array()
+	var pos := 0.0
+	var chunk := int(src_rate * 0.02)
+	var off := 0
+	while off < sig.size():
+		var endi: int = min(off + chunk, sig.size())
+		buf.append_array(sig.slice(off, endi))
+		var r := VoiceManager.resample_stream(buf, src_rate, dst_rate, pos)
+		chunked.append_array(r["out"])
+		buf = r["tail"]
+		pos = r["pos"]
+		off = endi
+
+	_check(absi(chunked.size() - full.size()) <= 1,
+		"chunked resample len %d ≈ one-shot %d" % [chunked.size(), full.size()])
+
+	var m: int = min(chunked.size(), full.size())
+	var maxd := 0.0
+	for i in m:
+		maxd = maxf(maxd, absf(chunked[i] - full[i]))
+	_check(maxd < 1e-5, "chunked == one-shot (max sample diff %.8f)" % maxd)
+
+	# Continuity: a clean 440 Hz tone resampled to 24 kHz must not have per-sample
+	# jumps anywhere near a discontinuity (well under the tone's own slew).
+	var maxjump := 0.0
+	for i in range(1, full.size()):
+		maxjump = maxf(maxjump, absf(full[i] - full[i - 1]))
+	_check(maxjump < 0.2, "no resample discontinuities (max step %.4f)" % maxjump)
