@@ -1,4 +1,4 @@
-﻿extends CanvasLayer
+extends CanvasLayer
 class_name LobbyUI
 
 signal start_game(seed_val: int, is_mp: bool)
@@ -31,8 +31,8 @@ var _counting:  bool  = false
 # raise the browser soft keyboard for a LineEdit, so text fields are edited through
 # a native window.prompt() instead (see _prompt_edit).
 var _mobile_web: bool = false
-var _last_prompt_ms: int = 0
-var _pending_name_field: LineEdit = null  # field awaiting DOM-input result (mobile web)
+var _last_prompt_ms: int = 0   # debounce duplicate tap â†’ prompt (touch + emulated mouse)
+var _pending_name_field: LineEdit = null  # field awaiting DOM-input result
 
 # â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 func _ready() -> void:
@@ -56,13 +56,13 @@ func _process(delta: float) -> void:
 			col = Color(1.0, 0.25, 0.25)
 		_ping_label.add_theme_color_override("font_color", col)
 
-	# Poll the non-blocking DOM name-input overlay result (mobile web only).
+	# Poll JS name-input overlay result (mobile web).
 	if _pending_name_field != null and OS.has_feature("web"):
-		var done = JavaScriptBridge.eval("typeof window._gdNameDone!=='undefined'&&window._gdNameDone===true")
+		var done = JavaScriptBridge.eval("typeof window._gdNameDone!='undefined'&&window._gdNameDone===true")
 		if done:
-			var val = JavaScriptBridge.eval("typeof window._gdNameVal!=='undefined'?String(window._gdNameVal):''")
+			var val = JavaScriptBridge.eval("typeof window._gdNameVal!='undefined'?String(window._gdNameVal):''")
 			if val != null:
-				var s := str(val).strip_edges()
+				var s: String = str(val).strip_edges()
 				if s != "":
 					_pending_name_field.text = s
 					_pending_name_field.caret_column = s.length()
@@ -441,13 +441,11 @@ func _make_field_mobile_friendly(field: LineEdit) -> void:
 			if tapped:
 				_prompt_edit(field, label))
 
-# Edit a field via a non-blocking DOM overlay (mobile web). window.prompt() was
-# replaced because it blocks the JS thread: on some mobile browsers this kills
-# the WebGL context or drops the WebSocket, making the game appear to quit.
-# The overlay stores its result in window._gdNameDone / window._gdNameVal, which
-# _process() polls and writes back to the field without blocking Godot.
+# Edit a field via the browser's native window.prompt() â€” opens the mobile soft
+# keyboard, then writes the typed value back. Debounced so a single tap delivered
+# as both a touch and an emulated-mouse event can't pop two prompts.
 func _prompt_edit(field: LineEdit, label: String) -> void:
-	if not OS.has_feature(“web”):
+	if not OS.has_feature("web"):
 		return
 	var now := Time.get_ticks_msec()
 	if now - _last_prompt_ms < 400:
@@ -456,29 +454,29 @@ func _prompt_edit(field: LineEdit, label: String) -> void:
 	_pending_name_field = field
 	var le := _js_escape(label)
 	var ve := _js_escape(field.text)
-	var js := “(function(){“
-	js += “window._gdNameDone=false;window._gdNameVal=’’;”
-	js += “var ov=document.getElementById(‘_gd_prompt’);if(ov)ov.remove();”
-	js += “ov=document.createElement(‘div’);ov.id=’_gd_prompt’;”
-	js += “ov.style=’position:fixed;inset:0;background:rgba(0,0,0,.72);display:flex;align-items:center;justify-content:center;z-index:9999’;”
-	js += “var box=document.createElement(‘div’);”
-	js += “box.style=’background:#1a1a2e;border:2px solid #4a9eff;border-radius:12px;padding:24px;width:80%;max-width:380px’;”
-	js += “var lbl=document.createElement(‘p’);lbl.textContent=’” + le + “’;”
-	js += “lbl.style=’color:#fff;font-size:18px;margin:0 0 12px;text-align:center’;”
-	js += “var inp=document.createElement(‘input’);inp.type=’text’;inp.value=’” + ve + “’;”
-	js += “inp.style=’width:100%;box-sizing:border-box;padding:10px;font-size:18px;border-radius:8px;border:none;background:#2a2a4a;color:#fff’;”
-	js += “var row=document.createElement(‘div’);row.style=’display:flex;gap:12px;margin-top:16px’;”
-	js += “function ok(){window._gdNameVal=inp.value;window._gdNameDone=true;ov.remove();}”
-	js += “function no(){window._gdNameDone=true;ov.remove();}”
-	js += “var okb=document.createElement(‘button’);okb.textContent=’OK’;”
-	js += “okb.style=’flex:1;padding:10px;font-size:16px;background:#2a6aad;color:#fff;border:none;border-radius:8px;’;okb.onclick=ok;”
-	js += “var cxb=document.createElement(‘button’);cxb.textContent=’Cancel’;”
-	js += “cxb.style=’flex:1;padding:10px;font-size:16px;background:#555;color:#fff;border:none;border-radius:8px;’;cxb.onclick=no;”
-	js += “inp.onkeydown=function(e){if(e.key===’Enter’)ok();else if(e.key===’Escape’)no();};”
-	js += “row.appendChild(okb);row.appendChild(cxb);box.appendChild(lbl);box.appendChild(inp);box.appendChild(row);”
-	js += “ov.appendChild(box);document.body.appendChild(ov);”
-	js += “setTimeout(function(){inp.focus();inp.select();},50);”
-	js += “})();”
+	var js := "(function(){"
+	js += "window._gdNameDone=false;window._gdNameVal='';"
+	js += "var ov=document.getElementById('_gd_prompt');if(ov)ov.remove();"
+	js += "ov=document.createElement('div');ov.id='_gd_prompt';"
+	js += "ov.style='position:fixed;inset:0;background:rgba(0,0,0,.72);display:flex;align-items:center;justify-content:center;z-index:9999';"
+	js += "var box=document.createElement('div');"
+	js += "box.style='background:#1a1a2e;border:2px solid #4a9eff;border-radius:12px;padding:24px;width:80%;max-width:380px';"
+	js += "var lbl=document.createElement('p');lbl.textContent='" + le + "';"
+	js += "lbl.style='color:#fff;font-size:18px;margin:0 0 12px;text-align:center';"
+	js += "var inp=document.createElement('input');inp.type='text';inp.value='" + ve + "';"
+	js += "inp.style='width:100%;box-sizing:border-box;padding:10px;font-size:18px;border-radius:8px;border:none;background:#2a2a4a;color:#fff';"
+	js += "var row=document.createElement('div');row.style='display:flex;gap:12px;margin-top:16px';"
+	js += "function ok(){window._gdNameVal=inp.value;window._gdNameDone=true;ov.remove();}"
+	js += "function no(){window._gdNameDone=true;ov.remove();}"
+	js += "var okb=document.createElement('button');okb.textContent='OK';"
+	js += "okb.style='flex:1;padding:10px;font-size:16px;background:#2a6aad;color:#fff;border:none;border-radius:8px';okb.onclick=ok;"
+	js += "var cxb=document.createElement('button');cxb.textContent='Cancel';"
+	js += "cxb.style='flex:1;padding:10px;font-size:16px;background:#555;color:#fff;border:none;border-radius:8px';cxb.onclick=no;"
+	js += "inp.onkeydown=function(e){if(e.key==='Enter')ok();else if(e.key==='Escape')no();};"
+	js += "row.appendChild(okb);row.appendChild(cxb);box.appendChild(lbl);box.appendChild(inp);box.appendChild(row);"
+	js += "ov.appendChild(box);document.body.appendChild(ov);"
+	js += "setTimeout(function(){inp.focus();inp.select();},50);"
+	js += "})();"
 	JavaScriptBridge.eval(js)
 
 # Escape a string for embedding inside a single-quoted JavaScript string literal.
