@@ -44,11 +44,21 @@ var held_trap: int:                   # read alias used by UI / place code
 	get: return trap_inventory[active_trap_slot]
 var _pickup_cooldown: float = 0.0
 
-# ── Gun system ────────────────────────────────────────────────────────────────
+# ── Gun system (2 slots) ─────────────────────────────────────────────────────
 var _gun_cooldown: float = 0.0
-var gun_type: int = -1   # -1 = no gun, 0 = pistol, 1 = shotgun, 2 = machinegun
-var gun_ammo: int = 0    # current ammo; -1 = unlimited
-const GUN_RANGE    := 28.0
+var gun_inventory:      Array = [-1, -1]   # gun type per slot (-1 = empty)
+var gun_ammo_inventory: Array = [0,  0 ]   # ammo per slot
+var active_gun_slot: int = 0
+
+var gun_type: int:   # alias for the active slot's type
+	get: return gun_inventory[active_gun_slot]
+	set(v): gun_inventory[active_gun_slot] = v
+
+var gun_ammo: int:   # alias for the active slot's ammo
+	get: return gun_ammo_inventory[active_gun_slot]
+	set(v): gun_ammo_inventory[active_gun_slot] = v
+
+const GUN_RANGE := 28.0
 
 # ── Blind overlay ────────────────────────────────────────────────────────────
 var _blind_overlay: ColorRect
@@ -261,8 +271,10 @@ func _input(event: InputEvent) -> void:
 
 	if event is InputEventKey and event.pressed and not event.echo:
 		match event.keycode:
-			KEY_SPACE:  _try_place()
+			KEY_SPACE:  _cycle_trap_slot()   # cycle to next non-empty trap slot
+			KEY_F:      _try_place()          # place active trap
 			KEY_TAB:    _fire_gun()
+			KEY_B:      _cycle_gun_slot()     # cycle between 2 gun slots
 			KEY_1:      active_trap_slot = 0
 			KEY_2:      active_trap_slot = 1
 			KEY_3:      active_trap_slot = 2
@@ -276,6 +288,19 @@ func _input(event: InputEvent) -> void:
 # ── Slot cycling ─────────────────────────────────────────────────────────────
 func _cycle_slot(dir: int) -> void:
 	active_trap_slot = (active_trap_slot + dir + 3) % 3
+
+func _cycle_trap_slot() -> void:
+	for i in 3:
+		var s := (active_trap_slot + i + 1) % 3
+		if trap_inventory[s] >= 0:
+			active_trap_slot = s
+			return
+	# all empty — still advance so player sees the slot change
+	active_trap_slot = (active_trap_slot + 1) % 3
+
+func _cycle_gun_slot() -> void:
+	active_gun_slot = (active_gun_slot + 1) % 2
+	_rebuild_viewmodel()
 
 # ── Gun ───────────────────────────────────────────────────────────────────────
 func _fire_gun() -> void:
@@ -312,7 +337,7 @@ func _fire_gun() -> void:
 	if gun_ammo > 0:
 		gun_ammo -= 1
 		if gun_ammo == 0:
-			gun_type = -1   # gun is empty, drop it
+			gun_inventory[active_gun_slot] = -1   # slot empty, drop it
 			_rebuild_viewmodel()
 
 func _spawn_bullet_local(pos: Vector3, dir: Vector3) -> void:
@@ -362,8 +387,14 @@ func _try_pickup() -> void:
 		if d < best_gun_dist: best_gun_dist = d; best_gun_box = box
 
 	if best_gun_box != null:
-		gun_type = best_gun_box.gun_type
-		gun_ammo = Config.GUN_AMMO_MAX[gun_type]
+		# Find a free gun slot; if both filled, overwrite the active slot
+		var fill_slot := -1
+		for s in 2:
+			if gun_inventory[s] < 0: fill_slot = s; break
+		if fill_slot < 0: fill_slot = active_gun_slot
+		gun_inventory[fill_slot]      = best_gun_box.gun_type
+		gun_ammo_inventory[fill_slot] = Config.GUN_AMMO_MAX[best_gun_box.gun_type]
+		active_gun_slot = fill_slot
 		best_gun_box.respawn_box()
 		_rebuild_viewmodel()
 		_pickup_cooldown = 0.5
