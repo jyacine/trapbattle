@@ -681,8 +681,12 @@ func _on_exit_stay() -> void:
 func _do_exit() -> void:
 	if multiplayer.has_multiplayer_peer():
 		multiplayer.multiplayer_peer.close()
+		multiplayer.multiplayer_peer = null  # stop peer_left(-1) from double-reloading
 	get_tree().paused = false
-	get_tree().reload_current_scene()
+	# change_scene_to_file deferred: gives signal handlers a frame to finish before
+	# the scene tree is torn down, and is more reliable than reload_current_scene()
+	# on mobile web where the current-scene path can be stale in the web runner.
+	get_tree().call_deferred("change_scene_to_file", "res://scenes/Main.tscn")
 
 # ── Win overlay ───────────────────────────────────────────────────────────────
 func _build_overlay() -> void:
@@ -719,10 +723,16 @@ func _show_overlay() -> void:
 		_overlay_label.text = "DRAW!"
 		_overlay_label.add_theme_color_override("font_color", Color.YELLOW)
 	else:
-		var idx = game_manager.player_ids.find(wpid)
-		var pname = ("Robot AI" if wpid == 0 else "Player %d" % (idx + 1))
-		_overlay_label.text = "%s WINS!" % pname
-		_overlay_label.add_theme_color_override("font_color", Color.RED)
+		var idx: int = game_manager.player_ids.find(wpid)
+		var wname: String
+		if _net != null and _net.player_names.has(wpid):
+			wname = _net.player_names[wpid]
+		elif wpid == 0:
+			wname = "Robot AI"
+		else:
+			wname = "Player %d" % (idx + 1)
+		_overlay_label.text = "YOU LOSE!\n\n%s wins" % wname
+		_overlay_label.add_theme_color_override("font_color", Color(0.95, 0.15, 0.15))
 
 	if _retry_btn == null:
 		_retry_btn = Button.new()
