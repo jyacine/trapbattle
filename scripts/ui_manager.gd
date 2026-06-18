@@ -906,10 +906,7 @@ func _set_hearts(box: HBoxContainer, count: int, px: float) -> void:
 		box.add_child(tr)
 
 # ── Inventory bar (bottom centre, always visible) ────────────────────────────
-var _trap_btn: Button = null
-var _trap_menu: PanelContainer = null   # kept for compat; no longer used
-var _gun_btn: Button = null
-var _gun_menu: PanelContainer = null    # kept for compat; no longer used
+var _select_btn: Button = null   # single wheel-open button (replaces old Traps + Gun)
 var _weapon_wheel: WeaponWheel = null
 var _wheel_open_by_key: bool = false
 
@@ -917,36 +914,26 @@ func _build_inventory_bar() -> void:
 	if player == null: return
 
 	const BTN_SIZE := 90.0
-	const GAP := 16.0
 	const MG := 30.0   # bottom margin (above hint label)
-	const TOTAL := BTN_SIZE * 2 + GAP
 
 	_inv_bar = Control.new()
 	_inv_bar.anchor_left   = 0.5; _inv_bar.anchor_right  = 0.5
 	_inv_bar.anchor_top    = 1.0; _inv_bar.anchor_bottom = 1.0
-	_inv_bar.offset_left   = -TOTAL * 0.5
-	_inv_bar.offset_right  =  TOTAL * 0.5
+	_inv_bar.offset_left   = -BTN_SIZE * 0.5
+	_inv_bar.offset_right  =  BTN_SIZE * 0.5
 	_inv_bar.offset_top    = -(BTN_SIZE + MG)
 	_inv_bar.offset_bottom = -MG
 	add_child(_inv_bar)
 
-	_trap_btn = Button.new()
-	_trap_btn.text = "Traps"
-	_trap_btn.position = Vector2(0, 0)
-	_trap_btn.size = Vector2(BTN_SIZE, BTN_SIZE)
-	_trap_btn.pressed.connect(_on_trap_btn_pressed)
-	_build_button_style(_trap_btn)
-	_inv_bar.add_child(_trap_btn)
+	_select_btn = Button.new()
+	_select_btn.text = "Select"
+	_select_btn.position = Vector2(0, 0)
+	_select_btn.size     = Vector2(BTN_SIZE, BTN_SIZE)
+	_select_btn.pressed.connect(_open_wheel)
+	_build_button_style(_select_btn)
+	_inv_bar.add_child(_select_btn)
 
-	_gun_btn = Button.new()
-	_gun_btn.text = "Gun"
-	_gun_btn.position = Vector2(BTN_SIZE + GAP, 0)
-	_gun_btn.size = Vector2(BTN_SIZE, BTN_SIZE)
-	_gun_btn.pressed.connect(_on_gun_btn_pressed)
-	_build_button_style(_gun_btn)
-	_inv_bar.add_child(_gun_btn)
-
-	# Weapon wheel overlay (replaces the old popup menus)
+	# Weapon wheel overlay
 	_weapon_wheel = WeaponWheel.new()
 	_weapon_wheel.player = player
 	_weapon_wheel.slot_selected.connect(_on_wheel_slot_selected)
@@ -965,12 +952,6 @@ func _build_button_style(btn: Button) -> void:
 	btn.add_theme_stylebox_override("focus", StyleBoxEmpty.new())
 	btn.add_theme_font_size_override("font_size", 16)
 
-func _on_trap_btn_pressed() -> void:
-	_open_wheel()
-
-func _on_gun_btn_pressed() -> void:
-	_open_wheel()
-
 func _open_wheel() -> void:
 	if _weapon_wheel == null or not game_manager.is_playing: return
 	if _weapon_wheel.visible:
@@ -986,103 +967,8 @@ func _on_wheel_slot_selected(is_gun: bool, slot_idx: int) -> void:
 	else:
 		player.active_trap_slot = slot_idx
 
-func _show_trap_menu() -> void:
-	_trap_menu = PanelContainer.new()
-	var sb = StyleBoxFlat.new()
-	sb.bg_color = Color(0.0, 0.0, 0.0, 0.90)
-	sb.set_border_width_all(2)
-	sb.border_color = Color(0.6, 0.6, 0.6, 1.0)
-	sb.set_corner_radius_all(6)
-	_trap_menu.add_theme_stylebox_override("panel", sb)
-	_trap_menu.anchor_left = 0.5
-	_trap_menu.anchor_right = 0.5
-	_trap_menu.anchor_bottom = 1.0
-	_trap_menu.offset_left = -80
-	_trap_menu.offset_right = 80
-	_trap_menu.offset_bottom = -(90 + 30 + 10)
-	add_child(_trap_menu)
-
-	var vbox = VBoxContainer.new()
-	vbox.add_theme_constant_override("separation", 4)
-	_trap_menu.add_child(vbox)
-
-	for i in 3:
-		var trap_type: int = player.trap_inventory[i]
-		var btn = Button.new()
-		var is_active := (i == player.active_trap_slot)
-		if trap_type >= 0:
-			var trap_name = Config.TRAP_NAMES[trap_type]
-			btn.text = "%s[%d] %s" % ["► " if is_active else "  ", i + 1, trap_name]
-			btn.modulate = Config.TRAP_COLORS[trap_type]
-		else:
-			btn.text = "%s[%d] Empty" % ["► " if is_active else "  ", i + 1]
-			btn.modulate = Color(0.45, 0.45, 0.45)
-		var slot_idx := i
-		btn.pressed.connect(func():
-			player.active_trap_slot = slot_idx
-			if _trap_menu: _trap_menu.queue_free()
-			_trap_menu = null
-		)
-		btn.add_theme_font_size_override("font_size", 14)
-		var btn_sb = StyleBoxFlat.new()
-		btn_sb.bg_color = Color(0.22, 0.12, 0.05, 0.85) if is_active else Color(0.1, 0.1, 0.1, 0.8)
-		btn_sb.set_corner_radius_all(4)
-		btn.add_theme_stylebox_override("normal", btn_sb)
-		btn.add_theme_stylebox_override("hover", btn_sb)
-		btn.add_theme_stylebox_override("pressed", btn_sb)
-		vbox.add_child(btn)
-
-func _show_gun_menu() -> void:
-	_gun_menu = PanelContainer.new()
-	var sb = StyleBoxFlat.new()
-	sb.bg_color = Color(0.0, 0.0, 0.0, 0.90)
-	sb.set_border_width_all(2)
-	sb.border_color = Color(0.6, 0.6, 0.6, 1.0)
-	sb.set_corner_radius_all(6)
-	_gun_menu.add_theme_stylebox_override("panel", sb)
-	_gun_menu.anchor_left = 0.5
-	_gun_menu.anchor_right = 0.5
-	_gun_menu.anchor_bottom = 1.0
-	_gun_menu.offset_left = 0
-	_gun_menu.offset_right = 180
-	_gun_menu.offset_bottom = -(90 + 30 + 10)
-	add_child(_gun_menu)
-
-	var vbox = VBoxContainer.new()
-	vbox.add_theme_constant_override("separation", 4)
-	_gun_menu.add_child(vbox)
-
-	for i in 2:
-		var gtype: int = player.gun_inventory[i]
-		var is_active := (i == player.active_gun_slot)
-		var btn = Button.new()
-		if gtype >= 0:
-			var gun_name: String = Config.GUN_NAMES[gtype]
-			var ammo_val: int = player.gun_ammo_inventory[i]
-			var ammo_text: String = str(ammo_val) if ammo_val >= 0 else "~"
-			btn.text = "%s[%d] %s (%s)" % ["► " if is_active else "  ", i + 1, gun_name, ammo_text]
-			btn.modulate = Color(0.5, 0.8, 1.0)
-		else:
-			btn.text = "%s[%d] Empty" % ["► " if is_active else "  ", i + 1]
-			btn.modulate = Color(0.45, 0.45, 0.45)
-		var slot_idx := i
-		btn.pressed.connect(func():
-			player.active_gun_slot = slot_idx
-			player._rebuild_viewmodel()
-			if _gun_menu: _gun_menu.queue_free()
-			_gun_menu = null
-		)
-		btn.add_theme_font_size_override("font_size", 14)
-		var btn_sb = StyleBoxFlat.new()
-		btn_sb.bg_color = Color(0.05, 0.12, 0.22, 0.85) if is_active else Color(0.1, 0.1, 0.15, 0.8)
-		btn_sb.set_corner_radius_all(4)
-		btn.add_theme_stylebox_override("normal", btn_sb)
-		btn.add_theme_stylebox_override("hover", btn_sb)
-		btn.add_theme_stylebox_override("pressed", btn_sb)
-		vbox.add_child(btn)
-
 func _update_inventory_bar() -> void:
-	if _trap_btn == null or player == null:
+	if _select_btn == null or player == null:
 		return
 	if _weapon_wheel != null and _weapon_wheel.visible and not game_manager.is_playing:
 		_weapon_wheel.close(false)
@@ -1220,13 +1106,13 @@ func _input(event: InputEvent) -> void:
 				if _trap_nd != null and _trap_nd.get_global_rect().has_point(pos) and _trap_id == -1:
 					_trap_id = event.index
 					_trap_nd.modulate = Color(1.5, 1.5, 1.5)
-					_on_trap_btn_pressed()
+					_open_wheel()
 					get_viewport().set_input_as_handled()
 					return
 				if _switch_gun_nd != null and _switch_gun_nd.get_global_rect().has_point(pos) and _switch_gun_id == -1:
 					_switch_gun_id = event.index
 					_switch_gun_nd.modulate = Color(1.5, 1.5, 1.5)
-					_on_gun_btn_pressed()
+					_open_wheel()
 					get_viewport().set_input_as_handled()
 					return
 				if _look_id == -1:

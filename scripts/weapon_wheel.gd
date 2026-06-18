@@ -39,9 +39,14 @@ var _lbl_traps  : Label = null
 
 # ────────────────────────────────────────────────────────────────────────────
 func _ready() -> void:
-	set_anchors_preset(Control.PRESET_FULL_RECT)
 	mouse_filter = Control.MOUSE_FILTER_STOP
 	visible = false
+	get_tree().root.size_changed.connect(_on_viewport_resized)
+
+func _on_viewport_resized() -> void:
+	if visible:
+		size = get_viewport().get_visible_rect().size
+		queue_redraw()
 
 	_lbl_center = _make_lbl(22, Color.WHITE)
 	_lbl_center.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -67,6 +72,12 @@ func _make_lbl(sz: int, col: Color) -> Label:
 
 # ── Public API ────────────────────────────────────────────────────────────────
 func open() -> void:
+	# A Control added to a CanvasLayer doesn't inherit the viewport size
+	# automatically until layout runs; force it here so size * 0.5 is the
+	# actual screen centre when _draw() and _process() run immediately.
+	var vp_size: Vector2 = get_viewport().get_visible_rect().size
+	position = Vector2.ZERO
+	size     = vp_size
 	_hovered = -1
 	visible  = true
 	queue_redraw()
