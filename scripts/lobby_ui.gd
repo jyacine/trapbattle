@@ -32,7 +32,7 @@ var _counting:  bool  = false
 # a native window.prompt() instead (see _prompt_edit).
 var _mobile_web: bool = false
 var _last_prompt_ms: int = 0
-var _pending_name_field: LineEdit = null  # field awaiting DOM-input result (mobile web)   # debounce duplicate tap â†’ prompt (touch + emulated mouse)
+var _pending_name_field: LineEdit = null  # field awaiting DOM-input result (mobile web)
 
 # â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 func _ready() -> void:
