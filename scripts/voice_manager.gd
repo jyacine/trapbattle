@@ -19,10 +19,10 @@ class_name VoiceManager
 signal player_speaking_changed(pid: int, is_speaking: bool)
 
 const VOICE_RATE      := 16000   # send/playback rate — wideband voice (8 kHz band), clear
-const SEND_INTERVAL   := 0.06    # seconds between audio packets
+const SEND_INTERVAL   := 0.02    # seconds between audio packets
 const SPEAKING_TIMEOUT := 0.30   # silence after last packet → "stopped speaking"
 const VAD_THRESHOLD   := 0.010   # mic RMS above this counts as speech (favor transmitting)
-const VAD_HANGOVER    := 0.40    # keep transmitting this long after speech dips
+const VAD_HANGOVER    := 0.20    # keep transmitting this long after speech dips
 const MIC_BUS         := "VoiceMic"
 
 # ── Jitter buffer (fixes choppy playback) ────────────────────────────────────
@@ -31,10 +31,10 @@ const MIC_BUS         := "VoiceMic"
 # the audio generator underran it between bursts → choppy. Instead we QUEUE incoming
 # audio per speaker and keep the generator topped up to a target depth, starting
 # playout only after a small prebuffer. This trades a little latency for smoothness.
-const GEN_BUFFER_LEN := 0.30    # AudioStreamGenerator internal buffer (s)
-const JITTER_TARGET  := 0.12    # keep ~this much buffered in the generator (jitter tolerance)
-const JITTER_PREBUF  := 0.12    # accumulate this much before (re)starting playout
-const JITTER_MAX     := 0.40    # cap queued audio; drop oldest beyond this (bounds latency)
+const GEN_BUFFER_LEN := 0.25    # AudioStreamGenerator internal buffer (s)
+const JITTER_TARGET  := 0.08    # keep ~this much buffered in the generator (jitter tolerance)
+const JITTER_PREBUF  := 0.06    # accumulate this much before (re)starting playout
+const JITTER_MAX     := 0.25    # cap queued audio; drop oldest beyond this (bounds latency)
 
 # ── WebRTC DataChannel transport (UDP — off the TCP/WebSocket plane) ──────────
 # When enabled, voice flows over an UNRELIABLE/UNORDERED WebRTC DataChannel to the
@@ -160,8 +160,11 @@ func _process(delta: float) -> void:
 		if _vch != null:
 			if not _rtc_open and _vch.get_ready_state() == WebRTCDataChannel.STATE_OPEN:
 				_rtc_open = true
-			while _vch.get_available_packet_count() > 0:
+			var max_pkts := 8
+			var n := 0
+			while _vch.get_available_packet_count() > 0 and n < max_pkts:
 				_on_voice_datagram(_vch.get_packet())
+				n += 1
 
 	if _transmitting:
 		_send_timer -= delta
