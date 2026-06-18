@@ -554,17 +554,16 @@ func _update_minimap() -> void:
 					var px = c * MM_CELL + dx; var py = r * MM_CELL + dy
 					if px < w and py < h: _mm_image.set_pixel(px, py, col)
 
-	if player != null:
-		var pg = player.get_grid_position()
-		_mm_dot(pg[0], pg[1], Color.CYAN, 3)
-
+	# Other players first, then the local player on top.
 	for opp in get_tree().get_nodes_in_group("players"):
 		if opp == player or not is_instance_valid(opp): continue
 		var idx = opp.get("player_index") if opp.get("player_index") != null else 1
 		var col = Config.PLAYER_COLORS[idx % Config.PLAYER_COLORS.size()]
-		if opp.has_method("get_grid_position"):
-			var og = opp.get_grid_position()
-			_mm_dot(og[0], og[1], col, 2)
+		var oyaw: float = opp.get("yaw") if opp.get("yaw") != null else 0.0
+		_mm_arrow(opp.position, oyaw, col, 5.0)
+
+	if player != null:
+		_mm_arrow(player.position, player.yaw, Color.CYAN, 6.5)
 
 	for box in get_tree().get_nodes_in_group("trap_boxes"):
 		var bg = game_manager.world_to_grid(box.position)
@@ -581,6 +580,40 @@ func _mm_dot(gx: int, gy: int, col: Color, radius: int) -> void:
 			var py = gy * MM_CELL + MM_CELL / 2 + dy
 			if px >= 0 and px < w and py >= 0 and py < h:
 				_mm_image.set_pixel(px, py, col)
+
+# Draw a player as a triangle pointing in their facing direction. Position comes
+# from the world transform (sub-cell precision); facing from yaw. Player forward
+# in world is (-sin(yaw), -cos(yaw)) on the (x, z) plane, which maps directly to
+# the minimap's (x, y) axes.
+func _mm_arrow(wpos: Vector3, yaw: float, col: Color, size: float) -> void:
+	var w := _mm_image.get_width(); var h := _mm_image.get_height()
+	var cs: float = Config.CELL_SIZE
+	var c  := Vector2((wpos.x / cs) * MM_CELL, (wpos.z / cs) * MM_CELL)
+	var d  := Vector2(-sin(yaw), -cos(yaw))
+	if d.length() < 0.001: d = Vector2(0, -1)
+	d = d.normalized()
+	var perp  := Vector2(-d.y, d.x)
+	var tip   := c + d * size
+	var back  := c - d * (size * 0.55)
+	var left  := back + perp * (size * 0.62)
+	var right := back - perp * (size * 0.62)
+	var minx := int(floor(min(tip.x, min(left.x, right.x))))
+	var maxx := int(ceil( max(tip.x, max(left.x, right.x))))
+	var miny := int(floor(min(tip.y, min(left.y, right.y))))
+	var maxy := int(ceil( max(tip.y, max(left.y, right.y))))
+	for py in range(miny, maxy + 1):
+		for px in range(minx, maxx + 1):
+			if px < 0 or px >= w or py < 0 or py >= h: continue
+			if _point_in_tri(Vector2(px + 0.5, py + 0.5), tip, left, right):
+				_mm_image.set_pixel(px, py, col)
+
+func _point_in_tri(p: Vector2, a: Vector2, b: Vector2, c: Vector2) -> bool:
+	var d1: float = (p.x - b.x) * (a.y - b.y) - (a.x - b.x) * (p.y - b.y)
+	var d2: float = (p.x - c.x) * (b.y - c.y) - (b.x - c.x) * (p.y - c.y)
+	var d3: float = (p.x - a.x) * (c.y - a.y) - (c.x - a.x) * (p.y - a.y)
+	var has_neg: bool = d1 < 0.0 or d2 < 0.0 or d3 < 0.0
+	var has_pos: bool = d1 > 0.0 or d2 > 0.0 or d3 > 0.0
+	return not (has_neg and has_pos)
 
 # ── Exit / leave-match ─────────────────────────────────────────────────────────
 func _build_exit_button() -> void:

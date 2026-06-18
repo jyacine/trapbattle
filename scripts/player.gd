@@ -66,12 +66,26 @@ var _blind_overlay: ColorRect
 
 # ── Death / respawn animation ─────────────────────────────────────────────────
 var _death_overlay:    ColorRect = null
+var _replay_banner:    Label     = null
+var _letterbox_top:    ColorRect = null
+var _letterbox_bot:    ColorRect = null
 var _prev_respawning:  bool      = false
 var _respawn_drop_t:   float     = -1.0   # -1 = inactive; 0..1 = falling
 var _respawn_y_from:   float     = 0.0
 var _respawn_y_to:     float     = 0.0
 const RESPAWN_DROP_HEIGHT    := 9.0
 const RESPAWN_DROP_DURATION  := 1.4
+
+# ── Death replay (top-down killcam of the last moments) ───────────────────────
+const REPLAY_SECONDS := 2.5            # how much footage we keep
+var _replay_buf_pos: Array = []        # ring buffer of recent positions (Vector3)
+var _replay_buf_yaw: Array = []        # ring buffer of recent yaw (float)
+var _replaying:      bool  = false
+var _replay_t:       float = 0.0
+var _replay_path_pos: Array = []       # snapshot played back on death
+var _replay_path_yaw: Array = []
+var _replay_cam:     Camera3D = null
+var _replay_avatar:  Node3D   = null
 
 # ── Current grid pos ─────────────────────────────────────────────────────────
 var current_grid_pos: Array = [0, 0]
@@ -141,16 +155,46 @@ func _ready() -> void:
 		_build_viewmodel()
 		_build_debug_overlay()
 		_teleport_to(spawn_cell)
-		# Full-screen death fade overlay (above all gameplay layers)
+		# Death / replay overlay layer (above all gameplay layers)
 		var death_layer := CanvasLayer.new()
 		death_layer.layer = 110
 		add_child(death_layer)
+		# Full-screen black — only used for the quick cut-fade into the respawn drop.
 		_death_overlay = ColorRect.new()
 		_death_overlay.set_anchors_preset(Control.PRESET_FULL_RECT)
 		_death_overlay.color = Color(0, 0, 0, 0)
 		_death_overlay.visible = false
 		_death_overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		death_layer.add_child(_death_overlay)
+		# Cinematic letterbox bars + REPLAY banner, shown during the death killcam.
+		_letterbox_top = ColorRect.new()
+		_letterbox_top.color = Color(0, 0, 0, 0.9)
+		_letterbox_top.anchor_right = 1.0
+		_letterbox_top.anchor_bottom = 0.0
+		_letterbox_top.offset_bottom = 64
+		_letterbox_top.visible = false
+		_letterbox_top.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		death_layer.add_child(_letterbox_top)
+		_letterbox_bot = ColorRect.new()
+		_letterbox_bot.color = Color(0, 0, 0, 0.9)
+		_letterbox_bot.anchor_top = 1.0; _letterbox_bot.anchor_right = 1.0; _letterbox_bot.anchor_bottom = 1.0
+		_letterbox_bot.offset_top = -64
+		_letterbox_bot.visible = false
+		_letterbox_bot.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		death_layer.add_child(_letterbox_bot)
+		_replay_banner = Label.new()
+		_replay_banner.text = "▶  REPLAY"
+		_replay_banner.add_theme_font_size_override("font_size", 28)
+		_replay_banner.add_theme_color_override("font_color", Color(1.0, 0.35, 0.30))
+		_replay_banner.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.9))
+		_replay_banner.add_theme_constant_override("shadow_offset_x", 2)
+		_replay_banner.add_theme_constant_override("shadow_offset_y", 2)
+		_replay_banner.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		_replay_banner.anchor_right = 1.0
+		_replay_banner.offset_top = 78
+		_replay_banner.visible = false
+		_replay_banner.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		death_layer.add_child(_replay_banner)
 		if not OS.has_feature("web"):
 			Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 	else:
@@ -160,6 +204,8 @@ func _ready() -> void:
 # ────────────────────────────────────────────────────────────────────────────
 func _physics_process(delta: float) -> void:
 	if not game_manager.is_playing:
+		if _replaying:
+			_end_death_replay()   # match ended mid-respawn — restore the normal camera
 		return
 
 	if not is_local:
@@ -183,19 +229,17 @@ func _physics_process(delta: float) -> void:
 		_pending_yaw_delta = 0.0   # snap-drain the tail to avoid lingering drift
 
 	# ── Respawn state machine ────────────────────────────────────────────────
-	# On death: fade to black IN PLACE (no teleport yet) so the death spot is
-	# hidden behind the fade. When the respawn timer ends: teleport to the spawn
-	# point high in the air, fade back in, and drop down to the ground.
+	# On death: play a top-down replay of the last moments (instead of a fade).
+	# When the respawn timer ends: cut back, teleport to the spawn point high in
+	# the air, and drop down to the ground.
 	var is_respawning: bool = game_manager.respawning.get(peer_id, false)
 	if is_respawning and not _prev_respawning:
-		# Just died → start fade-to-black (stay where we died, frozen).
+		# Just died → start the killcam replay (stay where we died, frozen).
 		_respawn_drop_t = -1.0
-		if _death_overlay:
-			_death_overlay.visible = true
-			var tw_out := create_tween()
-			tw_out.tween_property(_death_overlay, "color", Color(0, 0, 0, 1.0), 0.45)
+		_start_death_replay()
 	elif not is_respawning and _prev_respawning:
-		# Just respawned → teleport to spawn, lift into the air, drop + fade in.
+		# Just respawned → stop replay, teleport to spawn, lift up, drop + fade in.
+		_end_death_replay()
 		_teleport_to(game_manager.get_spawn_for_index(player_index))
 		_respawn_y_to   = position.y
 		_respawn_y_from = position.y + RESPAWN_DROP_HEIGHT
@@ -204,11 +248,16 @@ func _physics_process(delta: float) -> void:
 		_respawn_drop_t = 0.0
 		velocity        = Vector3.ZERO
 		if _death_overlay:
+			# Black at the cut, then fade back to gameplay over the start of the drop.
+			_death_overlay.visible = true
+			_death_overlay.color = Color(0, 0, 0, 1.0)
 			var tw_in := create_tween()
-			tw_in.tween_property(_death_overlay, "color", Color(0, 0, 0, 0), 0.6)
+			tw_in.tween_property(_death_overlay, "color", Color(0, 0, 0, 0), 0.5)
 			tw_in.tween_callback(func(): if _death_overlay: _death_overlay.visible = false)
 	_prev_respawning = is_respawning
 	if is_respawning:
+		if _replaying:
+			_update_death_replay(delta)
 		return
 
 	# While dropping in from the sky, the player free-falls (no steering) — animate
@@ -283,6 +332,7 @@ func _physics_process(delta: float) -> void:
 
 	current_grid_pos = game_manager.world_to_grid(position)
 	_try_pickup()
+	_record_replay_frame()
 
 	if _blind_overlay:
 		_blind_overlay.visible = game_manager.has_effect(peer_id, "blind")
@@ -596,6 +646,102 @@ func get_grid_position() -> Array:
 
 func set_blind_overlay(overlay: ColorRect) -> void:
 	_blind_overlay = overlay
+
+# ── Death replay (top-down killcam) ───────────────────────────────────────────
+# Record one position+yaw sample per physics frame into a rolling buffer that
+# keeps the last REPLAY_SECONDS of movement.
+func _record_replay_frame() -> void:
+	_replay_buf_pos.append(position)
+	_replay_buf_yaw.append(yaw)
+	var cap: int = int(REPLAY_SECONDS * float(Engine.physics_ticks_per_second))
+	while _replay_buf_pos.size() > cap:
+		_replay_buf_pos.pop_front()
+		_replay_buf_yaw.pop_front()
+
+func _start_death_replay() -> void:
+	if _replay_buf_pos.size() < 2:
+		# Not enough footage (died right after spawn) → just black out the screen.
+		if _death_overlay:
+			_death_overlay.visible = true
+			_death_overlay.color = Color(0, 0, 0, 0.85)
+		return
+	_replay_path_pos = _replay_buf_pos.duplicate()
+	_replay_path_yaw = _replay_buf_yaw.duplicate()
+	_replaying = true
+	_replay_t  = 0.0
+
+	if _viewmodel_root: _viewmodel_root.visible = false
+
+	# Visible stand-in for the (otherwise body-less, first-person) local player.
+	_replay_avatar = _make_replay_avatar()
+	get_parent().add_child(_replay_avatar)
+
+	# Dedicated top-down camera that overrides the first-person view.
+	_replay_cam = Camera3D.new()
+	get_parent().add_child(_replay_cam)
+	_replay_cam.current = true
+
+	if _letterbox_top: _letterbox_top.visible = true
+	if _letterbox_bot: _letterbox_bot.visible = true
+	if _replay_banner: _replay_banner.visible = true
+
+func _update_death_replay(delta: float) -> void:
+	var n: int = _replay_path_pos.size()
+	if n < 2 or _replay_cam == null or _replay_avatar == null:
+		return
+	# Play the whole clip once across the respawn delay.
+	_replay_t = minf(_replay_t + delta / float(GameManager.RESPAWN_DELAY), 1.0)
+	var f: float  = _replay_t * float(n - 1)
+	var i: int    = int(f)
+	var i2: int   = mini(i + 1, n - 1)
+	var frac: float = f - float(i)
+	var pos: Vector3 = (_replay_path_pos[i] as Vector3).lerp(_replay_path_pos[i2], frac)
+	var yw: float = lerp_angle(_replay_path_yaw[i], _replay_path_yaw[i2], frac)
+	_replay_avatar.position   = pos
+	_replay_avatar.rotation.y = yw
+	# High, steep top-down chase framing centred on the avatar.
+	_replay_cam.position = pos + Vector3(0.0, 13.0, 5.0)
+	_replay_cam.look_at(pos + Vector3(0.0, 0.8, 0.0), Vector3.UP)
+
+func _end_death_replay() -> void:
+	_replaying = false
+	if is_instance_valid(_replay_cam):    _replay_cam.queue_free()
+	if is_instance_valid(_replay_avatar): _replay_avatar.queue_free()
+	_replay_cam = null
+	_replay_avatar = null
+	if camera_node: camera_node.current = true
+	if _viewmodel_root: _viewmodel_root.visible = (gun_type >= 0)
+	if _letterbox_top: _letterbox_top.visible = false
+	if _letterbox_bot: _letterbox_bot.visible = false
+	if _replay_banner: _replay_banner.visible = false
+	_replay_path_pos.clear()
+	_replay_path_yaw.clear()
+	# Start recording fresh from the new spawn so a quick re-death never replays
+	# across the teleport jump.
+	_replay_buf_pos.clear()
+	_replay_buf_yaw.clear()
+
+func _make_replay_avatar() -> Node3D:
+	var root := Node3D.new()
+	var pc: Color = Config.PLAYER_COLORS[player_index % Config.PLAYER_COLORS.size()]
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = pc
+	mat.emission_enabled = true; mat.emission = pc; mat.emission_energy_multiplier = 0.7
+	mat.metallic = 0.4; mat.roughness = 0.4
+	# Body capsule
+	var body := MeshInstance3D.new()
+	var cap := CapsuleMesh.new(); cap.radius = 0.30; cap.height = 1.6
+	body.mesh = cap; body.set_surface_override_material(0, mat)
+	body.position = Vector3(0, 0.9, 0)
+	root.add_child(body)
+	# Forward-pointing nose cone (shows facing direction from above)
+	var nose := MeshInstance3D.new()
+	var cone := CylinderMesh.new(); cone.top_radius = 0.0; cone.bottom_radius = 0.20; cone.height = 0.5
+	nose.mesh = cone; nose.set_surface_override_material(0, mat)
+	nose.rotation = Vector3(-PI / 2.0, 0, 0)   # +Y → -Z (player forward)
+	nose.position = Vector3(0, 0.9, -0.55)
+	root.add_child(nose)
+	return root
 
 # ── Viewmodel ─────────────────────────────────────────────────────────────────
 func _build_viewmodel() -> void:

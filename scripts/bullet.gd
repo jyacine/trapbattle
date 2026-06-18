@@ -56,6 +56,7 @@ func _process(delta: float) -> void:
 	const HIT_RADIUS := 0.55
 	const BODY_MIN_Y := 0.20   # above the feet
 	const BODY_MAX_Y := 1.80   # head height
+	const HEAD_MIN_Y := 1.45   # at/above this = headshot (double damage)
 	for target in get_tree().get_nodes_in_group("players"):
 		if not is_instance_valid(target): continue
 		var target_pid = target.get("peer_id")
@@ -66,10 +67,12 @@ func _process(delta: float) -> void:
 		var y_rel: float = position.y - target.position.y
 		if dx * dx + dz * dz < HIT_RADIUS * HIT_RADIUS \
 				and y_rel > BODY_MIN_Y and y_rel < BODY_MAX_Y:
+			var is_head: bool = y_rel >= HEAD_MIN_Y
+			var dmg: int = damage * 2 if is_head else damage
 			if multiplayer.has_multiplayer_peer():
-				game_manager.net_damage.rpc(target_pid, damage, owner_peer_id)
+				game_manager.net_damage.rpc(target_pid, dmg, owner_peer_id)
 			else:
-				game_manager.damage_player(target_pid, damage, owner_peer_id)
+				game_manager.damage_player(target_pid, dmg, owner_peer_id)
 			if sound_manager: sound_manager.play_gun_hit()
 			queue_free()
 			return
