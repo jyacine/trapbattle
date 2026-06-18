@@ -183,26 +183,48 @@ func _physics_process(delta: float) -> void:
 		_pending_yaw_delta = 0.0   # snap-drain the tail to avoid lingering drift
 
 	# ── Respawn state machine ────────────────────────────────────────────────
+	# On death: fade to black IN PLACE (no teleport yet) so the death spot is
+	# hidden behind the fade. When the respawn timer ends: teleport to the spawn
+	# point high in the air, fade back in, and drop down to the ground.
 	var is_respawning: bool = game_manager.respawning.get(peer_id, false)
 	if is_respawning and not _prev_respawning:
-		# Just died: teleport to spawn, fade to black
-		_teleport_to(game_manager.get_spawn_for_index(player_index))
+		# Just died → start fade-to-black (stay where we died, frozen).
+		_respawn_drop_t = -1.0
 		if _death_overlay:
 			_death_overlay.visible = true
-			create_tween().tween_property(_death_overlay, "color", Color(0, 0, 0, 1.0), 0.5)
+			var tw_out := create_tween()
+			tw_out.tween_property(_death_overlay, "color", Color(0, 0, 0, 1.0), 0.45)
 	elif not is_respawning and _prev_respawning:
-		# Just respawned: teleport, then drop from high above
+		# Just respawned → teleport to spawn, lift into the air, drop + fade in.
 		_teleport_to(game_manager.get_spawn_for_index(player_index))
 		_respawn_y_to   = position.y
 		_respawn_y_from = position.y + RESPAWN_DROP_HEIGHT
 		position.y      = _respawn_y_from
+		reset_physics_interpolation()   # don't smear the camera from ground → sky
 		_respawn_drop_t = 0.0
+		velocity        = Vector3.ZERO
 		if _death_overlay:
-			var tw := create_tween()
-			tw.tween_property(_death_overlay, "color", Color(0, 0, 0, 0), 0.8)
-			tw.tween_callback(func(): _death_overlay.visible = false)
+			var tw_in := create_tween()
+			tw_in.tween_property(_death_overlay, "color", Color(0, 0, 0, 0), 0.6)
+			tw_in.tween_callback(func(): if _death_overlay: _death_overlay.visible = false)
 	_prev_respawning = is_respawning
 	if is_respawning:
+		return
+
+	# While dropping in from the sky, the player free-falls (no steering) — animate
+	# Y here and skip the normal movement block below.
+	if _respawn_drop_t >= 0.0:
+		_respawn_drop_t = minf(_respawn_drop_t + delta / RESPAWN_DROP_DURATION, 1.0)
+		var drop_e: float = _respawn_drop_t * _respawn_drop_t   # ease-in: accelerating fall
+		position.y = lerpf(_respawn_y_from, _respawn_y_to, drop_e)
+		velocity   = Vector3.ZERO
+		if _respawn_drop_t >= 1.0:
+			_respawn_drop_t = -1.0
+			position.y = _respawn_y_to
+		current_grid_pos = game_manager.world_to_grid(position)
+		_update_viewmodel(delta)
+		if multiplayer.has_multiplayer_peer():
+			_net_pos.rpc(position, yaw)
 		return
 
 	var is_confused = game_manager.has_effect(peer_id, "confusion")
@@ -258,14 +280,6 @@ func _physics_process(delta: float) -> void:
 				_footstep_timer = FOOTSTEP_INTERVAL / speed_mult
 		else:
 			_footstep_timer = 0.0   # reset so first step after pause is immediate
-
-	# ── Respawn drop-in animation ─────────────────────────────────────────────
-	if _respawn_drop_t >= 0.0:
-		_respawn_drop_t = minf(_respawn_drop_t + delta / RESPAWN_DROP_DURATION, 1.0)
-		var t2: float = _respawn_drop_t * _respawn_drop_t   # ease-in (accelerating fall)
-		position.y = lerpf(_respawn_y_from, _respawn_y_to, t2)
-		if _respawn_drop_t >= 1.0:
-			_respawn_drop_t = -1.0
 
 	current_grid_pos = game_manager.world_to_grid(position)
 	_try_pickup()
