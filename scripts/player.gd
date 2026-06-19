@@ -97,10 +97,17 @@ var current_grid_pos: Array = [0, 0]
 # ── Footstep audio ────────────────────────────────────────────────────────────
 var _footstep_timer:   float = 0.0
 const FOOTSTEP_INTERVAL := 0.42   # seconds between steps
+const SPRINT_SPEED_MULT := 1.7    # velocity multiplier while sprinting
+const DOUBLE_TAP_WINDOW := 0.35   # seconds within which a second forward press triggers sprint
 
 # ── Touch input (left joystick = strafe/move, relative to facing) ─────────────
 var touch_move_x: float = 0.0   # strafe: -1 (left)  .. +1 (right)
 var touch_move_y: float = 0.0   # drive:  -1 (back)  .. +1 (forward)
+
+# ── Sprint state ───────────────────────────────────────────────────────────────
+var _sprinting:        bool  = false
+var _fwd_tap_t:        float = -1.0   # time (s) of last forward press, -1 = none
+var _fwd_was_active:   bool  = false  # forward was active last frame (for edge detect)
 
 # ── Multiplayer ───────────────────────────────────────────────────────────────
 var is_local: bool = true
@@ -326,6 +333,23 @@ func _physics_process(delta: float) -> void:
 			drive  = -drive
 			strafe = -strafe
 
+		# Sprint: double-tap forward (W/↑ key or joystick push).
+		# Detect the rising edge of forward input; second tap within DOUBLE_TAP_WINDOW
+		# activates sprint.  Sprint stops as soon as forward is released.
+		var fwd_active: bool = drive > 0.3
+		if fwd_active and not _fwd_was_active:
+			var now: float = Time.get_ticks_msec() * 0.001
+			if _fwd_tap_t >= 0.0 and (now - _fwd_tap_t) < DOUBLE_TAP_WINDOW:
+				_sprinting  = true
+				_fwd_tap_t  = -1.0
+			else:
+				_fwd_tap_t = now
+		if not fwd_active:
+			_sprinting = false
+		_fwd_was_active = fwd_active
+
+		var sprint_mult: float = SPRINT_SPEED_MULT if (_sprinting and drive > 0.0) else 1.0
+
 		var forward := Vector3(-sin(yaw), 0.0, -cos(yaw))
 		var right   := Vector3( cos(yaw), 0.0, -sin(yaw))
 		var dir     := forward * drive + right * strafe
@@ -333,17 +357,17 @@ func _physics_process(delta: float) -> void:
 			dir = dir.normalized()
 
 		# Physics-driven movement: smooth wall sliding, no jitter.
-		velocity = dir * move_speed * speed_mult
+		velocity = dir * move_speed * speed_mult * sprint_mult
 		move_and_slide()
 		_dbg_slides     = get_slide_collision_count()
 		_dbg_real_speed = velocity.length()
 
 		if dir.length_squared() > 0.0001:
-			# Footstep sound
+			# Footstep sound (faster cadence when sprinting)
 			_footstep_timer -= delta
 			if _footstep_timer <= 0.0:
 				if sound_manager: sound_manager.play_footstep()
-				_footstep_timer = FOOTSTEP_INTERVAL / speed_mult
+				_footstep_timer = FOOTSTEP_INTERVAL / (speed_mult * sprint_mult)
 		else:
 			_footstep_timer = 0.0   # reset so first step after pause is immediate
 
