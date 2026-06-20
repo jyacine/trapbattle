@@ -12,13 +12,16 @@ var maze_seed: int = 0
 var selected_map: int = 1
 var selected_level: String = "medium"   # "easy" | "medium" | "hard"
 
-# Selectable maps. `id` is what gets synced match-wide and switched on in main.gd.
+# Selectable maps. `id` is synced match-wide.
+# ids 1..5 = procedural maze layouts with visual themes
+# id 6     = fixed real-village layout loaded from PNG mask
 const MAPS: Array = [
-	{"id": 1, "name": "Labyrinth",  "desc": "Stone dungeon"},
-	{"id": 2, "name": "Garage",     "desc": "Concrete & steel"},
-	{"id": 3, "name": "Forest",     "desc": "Hedgerows & sky"},
-	{"id": 4, "name": "Village",    "desc": "Haunted, moonlit fog"},
-	{"id": 5, "name": "Canyon",     "desc": "Open rocky badlands"},
+	{"id": 1, "name": "Labyrinth",      "desc": "Stone dungeon"},
+	{"id": 2, "name": "Garage",         "desc": "Concrete & steel"},
+	{"id": 3, "name": "Forest",         "desc": "Hedgerows & sky"},
+	{"id": 4, "name": "Village",        "desc": "Abandoned, at dusk"},
+	{"id": 5, "name": "Canyon",         "desc": "Open rocky badlands"},
+	{"id": 6, "name": "Village (Real)", "desc": "Fixed village layout from mask"},
 ]
 
 static func map_name(id: int) -> String:
