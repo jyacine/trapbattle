@@ -14,6 +14,14 @@ var _selected_color:  int   = 0
 var _default_name:    String = ""
 var _menu_nodes:      Array = []
 
+# Map picker — buttons live in both the menu (drives single-player + captain's
+# pre-pick) and the lobby overlay (captain only). All map buttons are tracked
+# here so the highlight stays in sync across both rows.
+var _selected_map:    int   = 1
+var _map_btns:        Array = []   # [{ "btn": Button, "id": int }, …]
+var _lobby_map_row:   HBoxContainer = null
+var _lobby_map_label: Label = null
+
 # Lobby overlay controls (shown after connecting)
 var _player_list:      Label = null
 var _countdown_label:  Label = null
@@ -187,11 +195,17 @@ func _build_menu() -> void:
 		color_row.add_child(cb)
 		_color_btns.append(cb)
 
+	# Map picker (single-player uses this directly; in multiplayer the captain's
+	# pick is sent on START). Tap a map to select it.
+	var map_row = _make_map_row(152, 186)
+	add_child(map_row)
+	_menu_nodes.append(map_row)
+
 	var btn_host = _mk_btn("HOST GAME", Color(0.15, 0.35, 0.85))
 	btn_host.anchor_left = 0.5;  btn_host.anchor_right  = 0.5
 	btn_host.anchor_top  = 0.5;  btn_host.anchor_bottom = 0.5
 	btn_host.offset_left = -210; btn_host.offset_right  = -8
-	btn_host.offset_top  = 156;  btn_host.offset_bottom = 212
+	btn_host.offset_top  = 198;  btn_host.offset_bottom = 250
 	btn_host.pressed.connect(_on_host)
 	btn_host.visible = not is_web
 	add_child(btn_host)
@@ -202,7 +216,7 @@ func _build_menu() -> void:
 	btn_join.anchor_left = 0.5;   btn_join.anchor_right  = 0.5
 	btn_join.anchor_top  = 0.5;   btn_join.anchor_bottom = 0.5
 	btn_join.offset_left = join_left; btn_join.offset_right = 210
-	btn_join.offset_top  = 156;   btn_join.offset_bottom = 212
+	btn_join.offset_top  = 198;   btn_join.offset_bottom = 250
 	btn_join.pressed.connect(_on_join)
 	add_child(btn_join)
 	_menu_nodes.append(btn_join)
@@ -214,7 +228,7 @@ func _build_menu() -> void:
 	_status.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_status.anchor_left = 0.0; _status.anchor_right = 1.0
 	_status.anchor_top  = 0.5; _status.anchor_bottom = 0.5
-	_status.offset_top  = 228; _status.offset_bottom = 268
+	_status.offset_top  = 262; _status.offset_bottom = 300
 	add_child(_status)
 	_menu_nodes.append(_status)
 
@@ -301,6 +315,25 @@ func _build_lobby_overlay() -> void:
 	_start_btn.pressed.connect(_on_start_pressed)
 	add_child(_start_btn)
 
+	# Captain-only map picker, just above START. The choice is synced to every
+	# player when the game starts.
+	_lobby_map_label = Label.new()
+	_lobby_map_label.text = "Map:  %s" % Config.map_name(_selected_map)
+	_lobby_map_label.add_theme_font_size_override("font_size", 16)
+	_lobby_map_label.add_theme_color_override("font_color", Color(0.85, 0.92, 1.0))
+	_lobby_map_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_lobby_map_label.anchor_left = 0.0; _lobby_map_label.anchor_right = 1.0
+	_lobby_map_label.anchor_top  = 1.0; _lobby_map_label.anchor_bottom = 1.0
+	_lobby_map_label.offset_top  = -152; _lobby_map_label.offset_bottom = -128
+	_lobby_map_label.visible = false
+	add_child(_lobby_map_label)
+
+	_lobby_map_row = _make_map_row(0, 0)
+	_lobby_map_row.anchor_top = 1.0; _lobby_map_row.anchor_bottom = 1.0
+	_lobby_map_row.offset_top = -122; _lobby_map_row.offset_bottom = -88
+	_lobby_map_row.visible = false
+	add_child(_lobby_map_row)
+
 # â”€â”€ Transition from menu â†’ 3-D lobby room â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 func _enter_lobby_room() -> void:
 	for c: Node in _menu_nodes:
@@ -328,6 +361,51 @@ func _on_color_selected(idx: int) -> void:
 			sb.border_color = Color.WHITE
 			sb.set_border_width_all(3)
 		_color_btns[i].add_theme_stylebox_override("normal", sb)
+
+# ── Map picker ────────────────────────────────────────────────────────────────
+# Build a centred row of map buttons. Selecting one sets Config.selected_map; in
+# multiplayer the captain's choice is sent on START and synced to every client.
+func _make_map_row(top: float, bottom: float) -> HBoxContainer:
+	var row = HBoxContainer.new()
+	row.anchor_left = 0.5; row.anchor_right = 0.5
+	row.anchor_top  = 0.5; row.anchor_bottom = 0.5
+	row.offset_left = -210; row.offset_right = 210
+	row.offset_top  = top;  row.offset_bottom = bottom
+	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	row.add_theme_constant_override("separation", 4)
+	# Buttons sized so the full map roster fits the ~420 px row (currently 5 maps).
+	for m in Config.MAPS:
+		var mid: int = m["id"]
+		var b = Button.new()
+		b.text = m["name"]
+		b.custom_minimum_size = Vector2(80, 34)
+		b.tooltip_text = m["desc"]
+		b.add_theme_font_size_override("font_size", 12)
+		b.pressed.connect(func(): _on_map_selected(mid))
+		_style_map_button(b, mid == _selected_map)
+		row.add_child(b)
+		_map_btns.append({ "btn": b, "id": mid })
+	return row
+
+func _style_map_button(b: Button, selected: bool) -> void:
+	var sb = StyleBoxFlat.new()
+	sb.bg_color     = Color(0.18, 0.32, 0.16, 0.95) if selected else Color(0.11, 0.13, 0.18, 0.92)
+	sb.border_color = Color(0.40, 1.00, 0.45)       if selected else Color(0.38, 0.42, 0.50)
+	sb.set_border_width_all(3 if selected else 2)
+	sb.set_corner_radius_all(6)
+	b.add_theme_stylebox_override("normal",  sb)
+	b.add_theme_stylebox_override("hover",   sb)
+	b.add_theme_stylebox_override("pressed", sb)
+	b.add_theme_color_override("font_color", Color.WHITE)
+
+func _on_map_selected(map_id: int) -> void:
+	_selected_map = map_id
+	Config.selected_map = map_id
+	for entry in _map_btns:
+		if is_instance_valid(entry["btn"]):
+			_style_map_button(entry["btn"], entry["id"] == map_id)
+	if _lobby_map_label:
+		_lobby_map_label.text = "Map:  %s" % Config.map_name(map_id)
 
 func _apply_identity() -> void:
 	var name = _name_field.text.strip_edges() if _name_field else ""
@@ -397,6 +475,12 @@ func _on_lobby_updated(peer_ids: Array) -> void:
 	if _start_btn:
 		_start_btn.visible  = _net.is_captain and peer_ids.size() >= 2
 		_start_btn.disabled = false
+
+	# Map picker is the captain's call — only they see/choose it.
+	if _lobby_map_row:
+		_lobby_map_row.visible = _net.is_captain
+	if _lobby_map_label:
+		_lobby_map_label.visible = _net.is_captain
 
 func _on_start_pressed() -> void:
 	if _start_btn:

@@ -6,9 +6,25 @@ var maze_seed: int = 0
 
 
 # ── Map / Level selection (set from menu or directly) ──────────────────────
-# selected_map: 1 = Dungeon (brick/stone), 2 = Ice Cave (ice/frost)
+# selected_map indexes into MAPS below. The maze LAYOUT is identical on every
+# map (seed-driven); each map id is a distinct environment — walls, floor,
+# ceiling/sky, lighting, fog and scattered props — rendered in main.gd.
 var selected_map: int = 1
 var selected_level: String = "medium"   # "easy" | "medium" | "hard"
+
+# Selectable maps. `id` is what gets synced match-wide and switched on in main.gd.
+const MAPS: Array = [
+	{"id": 1, "name": "Labyrinth",  "desc": "Stone dungeon"},
+	{"id": 2, "name": "Garage",     "desc": "Concrete & steel"},
+	{"id": 3, "name": "Forest",     "desc": "Hedgerows & sky"},
+	{"id": 4, "name": "Village",    "desc": "Abandoned, at dusk"},
+	{"id": 5, "name": "Canyon",     "desc": "Open rocky badlands"},
+]
+
+static func map_name(id: int) -> String:
+	for m in MAPS:
+		if m["id"] == id: return m["name"]
+	return "Map %d" % id
 
 # ── Grid / Maze ─────────────────────────────────────────────────────────────
 const MAZE_COLS       = 27

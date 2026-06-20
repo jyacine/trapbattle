@@ -12,6 +12,9 @@ publish.ps1
 # AI instructions — local only
 CLAUDE.md
 
+# E2E test artefacts (generated audio + reports — not versioned)
+test_report/
+
 # OS
 .DS_Store
 Thumbs.db

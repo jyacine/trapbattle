@@ -1,0 +1,12 @@
+# E2E voice test — Python dependencies
+# Install with:  pip install -r tests/requirements.txt
+
+# Required (WAV I/O + signal processing)
+numpy>=1.24
+scipy>=1.11
+
+# Optional but strongly recommended (ITU-T PESQ MOS score)
+# pesq>=0.0.4
+
+# Optional (Short-Time Objective Intelligibility)
+# pystoi>=0.3.3
