@@ -372,14 +372,15 @@ func _make_map_row(top: float, bottom: float) -> HBoxContainer:
 	row.offset_left = -210; row.offset_right = 210
 	row.offset_top  = top;  row.offset_bottom = bottom
 	row.alignment = BoxContainer.ALIGNMENT_CENTER
-	row.add_theme_constant_override("separation", 5)
+	row.add_theme_constant_override("separation", 4)
+	# Buttons sized so the full map roster fits the ~420 px row (currently 5 maps).
 	for m in Config.MAPS:
 		var mid: int = m["id"]
 		var b = Button.new()
 		b.text = m["name"]
-		b.custom_minimum_size = Vector2(98, 34)
+		b.custom_minimum_size = Vector2(80, 34)
 		b.tooltip_text = m["desc"]
-		b.add_theme_font_size_override("font_size", 13)
+		b.add_theme_font_size_override("font_size", 12)
 		b.pressed.connect(func(): _on_map_selected(mid))
 		_style_map_button(b, mid == _selected_map)
 		row.add_child(b)

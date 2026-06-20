@@ -22,9 +22,9 @@ func _initialize() -> void:
 			row.append(1 if is_wall else 0)
 		grid.append(row)
 
-	var names := ["", "Labyrinth", "Garage", "Forest", "Village"]
+	var names := ["", "Labyrinth", "Garage", "Forest", "Village", "Canyon"]
 	var ok := true
-	for id in [1, 2, 3, 4]:
+	for id in [1, 2, 3, 4, 5]:
 		var wm = main._make_wall_material(id)
 		var fm = main._make_floor_material(id)
 		var cm = main._make_ceiling_material(id)

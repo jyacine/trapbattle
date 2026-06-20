@@ -226,6 +226,7 @@ func _scatter_props(map_id: int, grid: Array, rows: int, cols: int, cs: float, w
 		2: _props_garage(wall_cells, dead_ends, grid, rows, cols, cs, wall_h, maze_node)
 		3: _props_forest(wall_cells, dead_ends, cs, wall_h, maze_node)
 		4: _props_village(dead_ends, cs, maze_node)
+		5: _props_canyon(wall_cells, dead_ends, cs, wall_h, maze_node)
 
 # Add one MultiMeshInstance3D batching `mesh` at every transform in `xforms`.
 func _add_multimesh(mesh: Mesh, mat: Material, xforms: Array, maze_node: Node3D) -> void:
@@ -312,6 +313,27 @@ func _props_village(dead_ends: Array, cs: float, maze_node: Node3D) -> void:
 	_add_multimesh(barrel_mesh, _solid_mat(Color(0.40, 0.26, 0.13), 0.85), barrels, maze_node)
 	_add_multimesh(crate_mesh,  _solid_mat(Color(0.46, 0.33, 0.18), 0.9),  crates, maze_node)
 
+# Canyon: jagged rock spires crowning the cliff walls + boulders in dead-ends —
+# gives the maze an open badlands skyline without changing the layout.
+func _props_canyon(wall_cells: Array, dead_ends: Array, cs: float, wall_h: float, maze_node: Node3D) -> void:
+	var spire_mesh := CylinderMesh.new()
+	spire_mesh.top_radius = 0.05; spire_mesh.bottom_radius = 0.55; spire_mesh.height = 1.7
+	var spires: Array = []
+	for i in range(wall_cells.size()):
+		if i % 4 != 0: continue   # ~1/4 of walls get a spire
+		var cell: Vector2i = wall_cells[i]
+		var h: float = sin(float(i) * 21.7) * 311.3
+		var jitter: float = (h - floorf(h)) * 0.5
+		spires.append(Transform3D(Basis(), Vector3((cell.x + 0.5) * cs, wall_h + 0.7 + jitter, (cell.y + 0.5) * cs)))
+	_add_multimesh(spire_mesh, _solid_mat(Color(0.55, 0.36, 0.22), 0.95), spires, maze_node)
+
+	var rock_mesh := SphereMesh.new(); rock_mesh.radius = 0.55; rock_mesh.height = 0.8
+	var rocks: Array = []
+	for i in range(dead_ends.size()):
+		var cell: Vector2i = dead_ends[i]
+		rocks.append(Transform3D(Basis(), Vector3((cell.x + 0.5) * cs, 0.3, (cell.y + 0.5) * cs)))
+	_add_multimesh(rock_mesh, _solid_mat(Color(0.50, 0.42, 0.34), 1.0), rocks, maze_node)
+
 # ── Map materials ─────────────────────────────────────────────────────────────
 func _make_wall_material(map_id: int) -> Material:
 	var shader = Shader.new()
@@ -355,6 +377,20 @@ void fragment() {
 	float seam = smoothstep(0.44, 0.5, abs(fract(uv.x) - 0.5));
 	wood = mix(wood, vec3(0.12, 0.08, 0.04), seam * 0.6);
 	ALBEDO = wood; ROUGHNESS = 0.95;
+}
+"""
+	elif map_id == 5:
+		# Canyon — banded sandstone cliff strata.
+		shader.code = """
+shader_type spatial;
+void fragment() {
+	vec2 uv = UV * vec2(3.0, 4.0);
+	float strata = floor(uv.y + sin(uv.x * 2.0) * 0.15);
+	float band = fract(sin(strata * 17.3) * 9999.0);
+	vec3 rock = mix(vec3(0.52, 0.30, 0.18), vec3(0.80, 0.54, 0.33), band);
+	float n = fract(sin(dot(floor(uv * 4.0), vec2(12.9, 78.2))) * 43758.5);
+	rock *= (0.85 + 0.15 * n);
+	ALBEDO = rock; ROUGHNESS = 0.95;
 }
 """
 	else:
@@ -418,6 +454,19 @@ void fragment() {
 	ALBEDO = dirt; ROUGHNESS = 1.0;
 }
 """
+	elif map_id == 5:
+		# Canyon — sun-baked sand with scattered rock.
+		shader.code = """
+shader_type spatial;
+void fragment() {
+	vec2 uv = UV * 10.0;
+	float n = fract(sin(dot(floor(uv), vec2(12.9, 78.2))) * 43758.5);
+	vec3 sand = mix(vec3(0.74, 0.58, 0.36), vec3(0.85, 0.69, 0.45), n);
+	float rock = fract(sin(dot(floor(uv * 0.5), vec2(31.7, 11.3))) * 2375.0);
+	sand = mix(sand, vec3(0.46, 0.34, 0.24), smoothstep(0.82, 1.0, rock) * 0.6);
+	ALBEDO = sand; ROUGHNESS = 1.0;
+}
+"""
 	else:
 		# Labyrinth (1, default) — stone checker tiles.
 		shader.code = """
@@ -449,6 +498,11 @@ func _make_ceiling_material(map_id: int) -> Material:
 		mat.albedo_color = Color(0.40, 0.28, 0.30); mat.roughness = 1.0
 		mat.emission_enabled = true; mat.emission = Color(0.55, 0.32, 0.20)
 		mat.emission_energy_multiplier = 0.45
+	elif map_id == 5:
+		# Canyon — bright open desert sky.
+		mat.albedo_color = Color(0.52, 0.68, 0.92); mat.roughness = 1.0
+		mat.emission_enabled = true; mat.emission = Color(0.58, 0.72, 0.96)
+		mat.emission_energy_multiplier = 0.9
 	else:
 		# Labyrinth (1, default) — dark stone ceiling.
 		mat.albedo_color = Color(0.12, 0.12, 0.15); mat.roughness = 1.0
@@ -474,6 +528,10 @@ func _create_lighting() -> void:
 			dir_light.light_color = Color(1.0, 0.62, 0.38); dir_light.light_energy = 0.55
 			env.ambient_light_color = Color(0.34, 0.26, 0.24); env.ambient_light_energy = 1.05
 			env.fog_enabled = true; env.fog_light_color = Color(0.45, 0.32, 0.24); env.fog_density = 0.025
+		5:  # Canyon — harsh bright sun, faint dusty haze
+			dir_light.light_color = Color(1.0, 0.93, 0.78); dir_light.light_energy = 1.0
+			env.ambient_light_color = Color(0.48, 0.42, 0.34); env.ambient_light_energy = 1.3
+			env.fog_enabled = true; env.fog_light_color = Color(0.72, 0.60, 0.45); env.fog_density = 0.012
 		_:  # Labyrinth (1, default) — warm torchlit stone
 			dir_light.light_color = Color(1.0, 0.85, 0.65); dir_light.light_energy = 0.5
 			env.ambient_light_color = Color(0.35, 0.30, 0.25); env.ambient_light_energy = 1.0

@@ -18,6 +18,7 @@ const MAPS: Array = [
 	{"id": 2, "name": "Garage",     "desc": "Concrete & steel"},
 	{"id": 3, "name": "Forest",     "desc": "Hedgerows & sky"},
 	{"id": 4, "name": "Village",    "desc": "Abandoned, at dusk"},
+	{"id": 5, "name": "Canyon",     "desc": "Open rocky badlands"},
 ]
 
 static func map_name(id: int) -> String:
