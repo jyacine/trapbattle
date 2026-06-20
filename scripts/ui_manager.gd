@@ -205,7 +205,7 @@ func _build_hud() -> void:
 	var is_mp     = multiplayer.has_multiplayer_peer()
 	var voice_hint = "  M=Mute/Unmute" if is_mp else ""
 	_hint_label = _make_label(
-		"W/S=Move  ←/→=Strafe  Q/E=Turn  C/SPACE=Cycle trap  N/LMB=Throw trap  V/B=Cycle gun  LMB/TAB=Fire  R=Restart" + voice_hint,
+		"W/S=Move  ←/→=Strafe  Q/E=Turn  C/SPACE=Cycle trap  N=Throw  RMB=Aim+Throw  V/B=Cycle gun  LMB/TAB=Fire  R=Restart" + voice_hint,
 		0, 0, 13, Color(0.8, 0.8, 0.8)
 	)
 	_hint_label.anchor_left   = 0.0; _hint_label.anchor_right = 1.0
@@ -963,7 +963,9 @@ func _build_inventory_bar() -> void:
 	_build_button_style(_select_btn)
 	_inv_bar.add_child(_select_btn)
 
-	# Active-item preview above button: left = trap, right = gun
+	# Active-item preview above button: left = trap, right = gun.
+	# No boxed background — the icon + trap dot/name float directly on the HUD
+	# (like the action buttons) so the equipped items read at a glance.
 	const PREVIEW_H := 52.0
 	const HALF      := BTN_SIZE * 0.5
 	var preview_panel := Control.new()
@@ -971,25 +973,6 @@ func _build_inventory_bar() -> void:
 	preview_panel.size     = Vector2(BTN_SIZE, PREVIEW_H)
 	preview_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_inv_bar.add_child(preview_panel)
-
-	# Background panel
-	var pp_bg := PanelContainer.new()
-	pp_bg.set_anchors_preset(Control.PRESET_FULL_RECT)
-	pp_bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	var pp_sb := StyleBoxFlat.new()
-	pp_sb.bg_color = Color(0.04, 0.04, 0.08, 0.78)
-	pp_sb.set_border_width_all(1); pp_sb.border_color = Color(0.35, 0.35, 0.4, 0.6)
-	pp_sb.set_corner_radius_all(6)
-	pp_bg.add_theme_stylebox_override("panel", pp_sb)
-	preview_panel.add_child(pp_bg)
-
-	# Vertical divider between trap (left) and gun (right)
-	var divider := ColorRect.new()
-	divider.color = Color(0.45, 0.45, 0.55, 0.45)
-	divider.position = Vector2(HALF - 1, 5)
-	divider.size = Vector2(2, PREVIEW_H - 10)
-	divider.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	preview_panel.add_child(divider)
 
 	# Trap section – left half: coloured dot + name
 	_active_trap_dot = ColorRect.new()

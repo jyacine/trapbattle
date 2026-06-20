@@ -106,3 +106,88 @@ The default lobby host is `172-174-208-254.nip.io` (the live Azure VM). Change i
   [architecture.md §6](architecture.md#6-voice-transport-two-options).
 - Requires `audio/driver/enable_input=true` in `project.godot` (already set).
 - Inside the itch.io iframe, mic access requires the `allow="microphone"` attribute. Use the fullscreen button if the browser blocks the prompt.
+
+---
+
+## E2E voice communication test
+
+An automated end-to-end test that:
+1. Generates a 12-second chirp audio file covering the speech band (100 Hz – 4 kHz).
+2. Launches **two headless Godot processes** that connect to the live dedicated server
+   as Player 1 (sender) and Player 2 (receiver).
+3. Player 1 streams the audio through the server's voice relay for 10 seconds.
+4. Player 2 captures all received voice packets and saves them to a WAV file.
+5. The Python orchestrator compares original vs received audio and produces a
+   quality report (SNR, Pearson correlation, optional PESQ MOS, packet-loss estimate).
+
+Output goes to `test_report/<timestamp>/` (git-ignored):
+- `voice_test.wav` — original test signal
+- `voice_received.wav` — what Player 2 heard
+- `report.md` — step-by-step log + quality metrics
+
+### Prerequisites
+
+| Item | Requirement |
+|------|-------------|
+| Python | 3.10+ |
+| NumPy / SciPy | `pip install -r tests/requirements.txt` |
+| Godot | `C:\Users\XDGT0500\Downloads\Godot_v4.6.3-stable_win64.exe` |
+| Server | Live VM at `172.174.208.254` must be running; **no other players connected** |
+
+Optional: `pip install pesq` for an ITU-T P.862 PESQ MOS score.
+
+### Run
+
+```powershell
+# From the trapbattle project root:
+cd C:\work\game\trapbattle
+pip install -r tests/requirements.txt      # first time only
+python tests/e2e_voice_test.py
+```
+
+The test takes approximately **40 seconds** to complete:
+
+| Phase | Duration |
+|-------|----------|
+| Generate test audio | < 1 s |
+| Receiver connects + waits in lobby | ~3 s |
+| Sender connects, starts game, transmits 10 s | ~15 s |
+| Receiver finishes collecting + saves WAV | ~3 s |
+| Quality analysis + report | < 1 s |
+
+### Pass/fail criteria
+
+| Metric | Pass threshold |
+|--------|----------------|
+| SNR | > 10 dB |
+| Pearson correlation | > 0.60 |
+| Estimated packet loss | < 20 % |
+
+### Interpreting results
+
+- **SNR > 20 dB** → excellent; ADPCM codec is transparent at this level.
+- **SNR 10–20 dB** → acceptable for voice; some quantisation noise audible.
+- **SNR < 10 dB** → packet loss or network issues are dominating.
+- **Low correlation with non-trivial SNR** → timing/delay misalignment (check server relay latency).
+- **Large delay\_ms** → normal for the WebSocket-relay path (~50–200 ms); very large values (> 500 ms) indicate jitter or buffering issues.
+
+### How it works internally
+
+```
+Python orchestrator
+  │
+  ├─ starts tests/voice_receiver.gd  (headless Godot, Player 2)
+  │    └─ connects → lobby → waits for game start
+  │
+  └─ starts tests/voice_sender.gd    (headless Godot, Player 1)
+       ├─ connects → lobby → sends start → transmits 10 s of ADPCM
+       └─ server relays each packet to Player 2 via _rpc_play_voice
+
+Player 2 receives → decodes ADPCM → saves 24 kHz mono WAV
+Python measures SNR / correlation / PESQ and writes report.md
+```
+
+Both headless processes connect via `wss://172-174-208-254.nip.io` with default TLS
+(the nip.io host has a valid Let's Encrypt cert provisioned by Caddy) — exactly the
+same URL and TLS path the real game client uses. A bare-IP URL or `client_unsafe()`
+fails the handshake because Caddy needs SNI to select the cert.

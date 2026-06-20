@@ -33,6 +33,7 @@ var _ping_timer: float = 0.5   # send first ping quickly, then every 1 s
 # Late-join support — host tracks whether game is live
 var _game_started: bool = false
 var _game_seed:    int  = 0
+var _game_map:     int  = 1   # map id chosen for the current match (synced to all)
 
 # ── Listen-server host ────────────────────────────────────────────────────────
 func host_game() -> void:
@@ -84,15 +85,18 @@ func _on_connected_ok() -> void:
 
 # ── Start the game ────────────────────────────────────────────────────────────
 ## Called by the captain (host / first joiner) when ready to start.
-func request_start() -> void:
+## map_id < 0 means "use the locally selected map" (Config.selected_map).
+func request_start(map_id: int = -1) -> void:
+	if map_id < 0:
+		map_id = Config.selected_map
 	if multiplayer.is_server():
 		# Listen-server host: trigger directly
-		_do_start()
+		_do_start(map_id)
 	else:
 		# Client connected to dedicated server: ask the server to start
-		_rpc_request_start.rpc_id(1)
+		_rpc_request_start.rpc_id(1, map_id)
 
-func _do_start() -> void:
+func _do_start(map_id: int) -> void:
 	if _peers.size() < 1: return
 	var s = randi()
 	assignments.clear()
@@ -100,18 +104,21 @@ func _do_start() -> void:
 		assignments[_peers[i]] = i
 	_game_started = true
 	_game_seed    = s
-	_rpc_start_game.rpc(s, assignments)
+	_game_map     = map_id
+	_rpc_start_game.rpc(s, assignments, map_id)
 
 @rpc("any_peer", "call_remote", "reliable")
-func _rpc_request_start() -> void:
+func _rpc_request_start(map_id: int) -> void:
 	# Runs only on the server/host peer
 	if not multiplayer.is_server(): return
 	if _peers.size() < 2: return
-	_do_start()
+	_do_start(map_id)
 
 @rpc("authority", "call_local", "reliable")
-func _rpc_start_game(seed_val: int, asns: Dictionary) -> void:
+func _rpc_start_game(seed_val: int, asns: Dictionary, map_id: int) -> void:
 	assignments = asns
+	_game_map   = map_id
+	Config.selected_map = map_id
 	is_captain = (asns.get(multiplayer.get_unique_id(), -1) == 0)
 	lobby_ready.emit(seed_val)
 
@@ -132,7 +139,7 @@ func _rpc_join_info(name: String, color_idx: int) -> void:
 		assignments[sender] = new_idx
 
 		# Tell the newcomer to start the game immediately with current assignments
-		_rpc_late_join.rpc_id(sender, _game_seed, assignments)
+		_rpc_late_join.rpc_id(sender, _game_seed, assignments, _game_map)
 		# Tell every peer (including the host itself) to spawn the new player
 		_rpc_spawn_late_peer.rpc(sender, new_idx)
 	else:
@@ -176,8 +183,10 @@ func _on_server_left() -> void:
 
 ## Server → newcomer only: skip lobby, start game immediately.
 @rpc("authority", "call_remote", "reliable")
-func _rpc_late_join(seed_val: int, asns: Dictionary) -> void:
+func _rpc_late_join(seed_val: int, asns: Dictionary, map_id: int) -> void:
 	assignments = asns
+	_game_map   = map_id
+	Config.selected_map = map_id
 	is_captain  = false
 	lobby_ready.emit(seed_val)
 

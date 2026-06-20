@@ -44,6 +44,20 @@ var held_trap: int:                   # read alias used by UI / place code
 	get: return trap_inventory[active_trap_slot]
 var _pickup_cooldown: float = 0.0
 
+# ── Trap throw aiming (desktop: hold RMB to aim a lobbed arc, release to throw) ─
+# A ballistic preview arc + landing ring let the player pick exactly where the
+# trap lands, instead of the old fixed one-cell-ahead drop. Local/visual only —
+# the arc and marker exist on this client and are never networked.
+var _aiming_trap:      bool           = false
+var _traj_line:        MeshInstance3D = null   # ImmediateMesh arc preview
+var _traj_im:          ImmediateMesh  = null
+var _traj_marker:      MeshInstance3D = null   # landing-spot ring on the floor
+var _traj_target_cell: Array          = [0, 0]
+const THROW_SPEED     := 11.0   # initial throw velocity (m/s) along the aim ray
+const THROW_GRAVITY   := 17.0   # arc gravity (game-y, snappier than 9.8)
+const THROW_DT        := 0.03   # arc integration step (s)
+const THROW_MAX_STEPS := 70     # ~2.1 s max flight before giving up
+
 # ── Gun system (2 slots) ─────────────────────────────────────────────────────
 var _gun_cooldown: float = 0.0
 var gun_inventory:      Array = [-1, -1, -1]   # gun type per slot (-1 = empty)
@@ -384,6 +398,14 @@ func _physics_process(delta: float) -> void:
 
 	_update_viewmodel(delta)
 
+	# Live trap-aim preview (RMB held): refresh the arc, or cancel if the trap is
+	# gone / the round ended.
+	if _aiming_trap:
+		if not game_manager.is_playing or held_trap < 0:
+			_cancel_trap_aim()
+		else:
+			_update_trap_aim()
+
 	if multiplayer.has_multiplayer_peer():
 		_net_pos.rpc(position, yaw)
 
@@ -423,6 +445,13 @@ func _input(event: InputEvent) -> void:
 							Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 					else:
 						_fire_held = false
+				MOUSE_BUTTON_RIGHT:
+					# Hold to aim a lobbed trap throw (shows the arc), release to throw.
+					if event.pressed:
+						if Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
+							_begin_trap_aim()
+					else:
+						_release_trap_aim()
 				MOUSE_BUTTON_WHEEL_UP:
 					if event.pressed: _cycle_slot(-1)
 				MOUSE_BUTTON_WHEEL_DOWN:
@@ -535,15 +564,24 @@ func _spawn_bullet_local(pos: Vector3, dir: Vector3) -> void:
 	get_parent().add_child(b)
 
 # ── Trap placement ────────────────────────────────────────────────────────────
+# Quick throw: drop the trap one cell ahead (keyboard N / unarmed LMB).
 func _try_place() -> void:
-	var trap_type: int = trap_inventory[active_trap_slot]
-	if trap_type < 0 or trap_manager == null:
+	if trap_inventory[active_trap_slot] < 0 or trap_manager == null:
 		return
 	var forward    = Vector3(-sin(yaw), 0.0, -cos(yaw))
 	var throw_pos  = position + forward * Config.CELL_SIZE
 	var throw_cell = game_manager.world_to_grid(throw_pos)
-	var target_cell = throw_cell if game_manager.is_floor(throw_cell[0], throw_cell[1]) \
-								 else current_grid_pos
+	_place_trap_at(throw_cell)
+
+# Place the active trap at a specific grid cell (used by both the quick throw and
+# the aimed RMB throw). Falls back to the player's own cell if the target isn't a
+# floor cell. Consumes the trap and auto-advances to the next occupied slot.
+func _place_trap_at(target_cell: Array) -> void:
+	var trap_type: int = trap_inventory[active_trap_slot]
+	if trap_type < 0 or trap_manager == null:
+		return
+	if not game_manager.is_floor(target_cell[0], target_cell[1]):
+		target_cell = current_grid_pos
 	if multiplayer.has_multiplayer_peer():
 		trap_manager.net_place_trap.rpc(target_cell, peer_id, trap_type)
 	else:
@@ -554,6 +592,112 @@ func _try_place() -> void:
 		var s := (active_trap_slot + i + 1) % 3
 		if trap_inventory[s] >= 0:
 			active_trap_slot = s; break
+
+# ── Aimed trap throw (RMB) ────────────────────────────────────────────────────
+func _begin_trap_aim() -> void:
+	if game_manager == null or not game_manager.is_playing: return
+	if held_trap < 0: return            # nothing to throw
+	_aiming_trap = true
+	_ensure_traj_nodes()
+	_update_trap_aim()
+
+func _release_trap_aim() -> void:
+	if not _aiming_trap: return
+	_aiming_trap = false
+	_hide_traj_nodes()
+	_place_trap_at(_traj_target_cell)
+
+# Abort aiming WITHOUT throwing (game ended / trap lost mid-aim).
+func _cancel_trap_aim() -> void:
+	_aiming_trap = false
+	_hide_traj_nodes()
+
+func _ensure_traj_nodes() -> void:
+	if _traj_line == null:
+		_traj_im = ImmediateMesh.new()
+		_traj_line = MeshInstance3D.new()
+		_traj_line.mesh = _traj_im
+		_traj_line.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		var lm := StandardMaterial3D.new()
+		lm.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		lm.vertex_color_use_as_albedo = true
+		lm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		_traj_line.material_override = lm
+		get_parent().add_child(_traj_line)
+	if _traj_marker == null:
+		var ring := TorusMesh.new()
+		ring.inner_radius = 0.32
+		ring.outer_radius = 0.58
+		_traj_marker = MeshInstance3D.new()
+		_traj_marker.mesh = ring
+		_traj_marker.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		var mm := StandardMaterial3D.new()
+		mm.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		mm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		_traj_marker.material_override = mm
+		get_parent().add_child(_traj_marker)
+	_traj_line.visible = true
+	_traj_marker.visible = true
+
+func _hide_traj_nodes() -> void:
+	if _traj_line:   _traj_line.visible = false
+	if _traj_marker: _traj_marker.visible = false
+
+# Rebuild the preview arc + landing ring from the current aim each physics frame.
+func _update_trap_aim() -> void:
+	if camera_node == null or game_manager == null or _traj_im == null: return
+	var arc := _compute_throw_arc()
+	var pts: PackedVector3Array = arc["points"]
+	_traj_target_cell = arc["cell"]
+	var col: Color = Config.TRAP_COLORS.get(held_trap, Color(1.0, 0.9, 0.2))
+
+	_traj_im.clear_surfaces()
+	if pts.size() >= 2:
+		_traj_im.surface_begin(Mesh.PRIMITIVE_LINE_STRIP)
+		for i in pts.size():
+			var fade := 1.0 - float(i) / float(pts.size())
+			_traj_im.surface_set_color(Color(col.r, col.g, col.b, 0.30 + 0.70 * fade))
+			_traj_im.surface_add_vertex(pts[i])
+		_traj_im.surface_end()
+
+	var wpos := game_manager.grid_to_world(_traj_target_cell)
+	_traj_marker.position = Vector3(wpos.x, 0.06, wpos.z)
+	var mat := _traj_marker.material_override as StandardMaterial3D
+	if mat: mat.albedo_color = Color(col.r, col.g, col.b, 0.85)
+
+# Integrate a simple ballistic arc from the eye along the aim ray. Full-height
+# maze walls block the throw at any height, so the grid floor test doubles as the
+# wall test. Returns {points: PackedVector3Array, cell: [col,row] landing cell}.
+func _compute_throw_arc() -> Dictionary:
+	var origin: Vector3 = camera_node.global_position
+	var fwd: Vector3 = -camera_node.global_transform.basis.z
+	var v0: Vector3 = fwd * THROW_SPEED
+	var pts := PackedVector3Array()
+	pts.append(origin)
+	var landing: Array = current_grid_pos
+	var p := origin
+	var t := 0.0
+	for i in THROW_MAX_STEPS:
+		var prev := p
+		t += THROW_DT
+		p = origin + v0 * t + Vector3(0.0, -0.5 * THROW_GRAVITY * t * t, 0.0)
+		var cell := game_manager.world_to_grid(p)
+		if not game_manager.is_floor(cell[0], cell[1]):
+			# Hit a wall column — land on the last open cell the arc passed through.
+			var pc := game_manager.world_to_grid(prev)
+			if game_manager.is_floor(pc[0], pc[1]):
+				landing = pc
+			pts.append(Vector3(prev.x, maxf(prev.y, 0.06), prev.z))
+			return {"points": pts, "cell": landing}
+		if p.y <= 0.06:
+			p.y = 0.06
+			pts.append(p)
+			return {"points": pts, "cell": cell}
+		pts.append(p)
+	landing = game_manager.world_to_grid(p)
+	if not game_manager.is_floor(landing[0], landing[1]):
+		landing = current_grid_pos
+	return {"points": pts, "cell": landing}
 
 # ── Auto pick-up ─────────────────────────────────────────────────────────────
 func _try_pickup() -> void:

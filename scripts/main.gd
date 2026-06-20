@@ -194,10 +194,171 @@ func _create_maze() -> void:
 			var box_shape = BoxShape3D.new(); box_shape.size = Vector3(w * cs, wall_h, h * cs)
 			col_shape.shape = box_shape; wall_body.add_child(col_shape)
 
+	# Decorative, collision-free props that give each map its identity.
+	_scatter_props(map_id, grid, rows, cols, cs, wall_h, maze_node)
+
+# ── Map props (purely visual — no collision, never block gameplay) ────────────
+# Two passes: an overhead layer (light bars / canopies, sitting above the maze)
+# and a ground layer placed only in dead-end cells (3 wall neighbours) so props
+# never obstruct a through-corridor. All meshes are MultiMesh batches → one draw
+# call each, cheap on mobile web.
+func _scatter_props(map_id: int, grid: Array, rows: int, cols: int, cs: float, wall_h: float, maze_node: Node3D) -> void:
+	if map_id == 1:
+		return   # Labyrinth stays bare
+
+	# Collect wall cells and dead-end floor cells.
+	var wall_cells:  Array = []
+	var dead_ends:   Array = []
+	for r in range(rows):
+		for c in range(cols):
+			if grid[r][c] == 1:
+				wall_cells.append(Vector2i(c, r))
+			else:
+				var walls := 0
+				if r <= 0 or grid[r - 1][c] == 1: walls += 1
+				if r >= rows - 1 or grid[r + 1][c] == 1: walls += 1
+				if c <= 0 or grid[r][c - 1] == 1: walls += 1
+				if c >= cols - 1 or grid[r][c + 1] == 1: walls += 1
+				if walls >= 3:
+					dead_ends.append(Vector2i(c, r))
+
+	match map_id:
+		2: _props_garage(wall_cells, dead_ends, grid, rows, cols, cs, wall_h, maze_node)
+		3: _props_forest(wall_cells, dead_ends, cs, wall_h, maze_node)
+		4: _props_village(dead_ends, cs, maze_node)
+
+# Add one MultiMeshInstance3D batching `mesh` at every transform in `xforms`.
+func _add_multimesh(mesh: Mesh, mat: Material, xforms: Array, maze_node: Node3D) -> void:
+	if xforms.is_empty(): return
+	var mm := MultiMesh.new()
+	mm.transform_format = MultiMesh.TRANSFORM_3D
+	mm.mesh = mesh
+	mm.instance_count = xforms.size()
+	for i in xforms.size():
+		mm.set_instance_transform(i, xforms[i])
+	var mmi := MultiMeshInstance3D.new()
+	mmi.multimesh = mm
+	mmi.material_override = mat
+	mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	maze_node.add_child(mmi)
+
+func _emissive_mat(col: Color, energy: float) -> StandardMaterial3D:
+	var m := StandardMaterial3D.new()
+	m.albedo_color = col
+	m.emission_enabled = true; m.emission = col; m.emission_energy_multiplier = energy
+	return m
+
+func _solid_mat(col: Color, rough: float = 0.9) -> StandardMaterial3D:
+	var m := StandardMaterial3D.new()
+	m.albedo_color = col; m.roughness = rough
+	return m
+
+# Garage: a grid of glowing fluorescent bars under the ceiling + oil drums in dead-ends.
+func _props_garage(_wall_cells: Array, dead_ends: Array, grid: Array, rows: int, cols: int, cs: float, wall_h: float, maze_node: Node3D) -> void:
+	var bar_mesh := BoxMesh.new(); bar_mesh.size = Vector3(0.22, 0.10, 1.5)
+	var bars: Array = []
+	for r in range(2, rows - 1, 5):
+		for c in range(2, cols - 1, 5):
+			if grid[r][c] == 0:
+				bars.append(Transform3D(Basis(), Vector3((c + 0.5) * cs, wall_h - 0.12, (r + 0.5) * cs)))
+	_add_multimesh(bar_mesh, _emissive_mat(Color(0.95, 0.97, 0.85), 2.2), bars, maze_node)
+
+	# Oil drums (red cylinders) in a subset of dead-ends.
+	var drum_mesh := CylinderMesh.new()
+	drum_mesh.top_radius = 0.34; drum_mesh.bottom_radius = 0.34; drum_mesh.height = 0.95
+	var drums: Array = []
+	for i in range(0, dead_ends.size(), 3):
+		var cell: Vector2i = dead_ends[i]
+		drums.append(Transform3D(Basis(), Vector3((cell.x + 0.5) * cs, 0.48, (cell.y + 0.5) * cs)))
+	_add_multimesh(drum_mesh, _solid_mat(Color(0.65, 0.12, 0.10), 0.5), drums, maze_node)
+
+# Forest: leafy canopies resting on top of hedge walls + bushes in dead-ends.
+func _props_forest(wall_cells: Array, dead_ends: Array, cs: float, wall_h: float, maze_node: Node3D) -> void:
+	var canopy_mesh := SphereMesh.new()
+	canopy_mesh.radius = 1.05; canopy_mesh.height = 1.7
+	var canopies: Array = []
+	for i in range(wall_cells.size()):
+		if i % 3 != 0: continue   # ~1/3 of walls get a treetop
+		var cell: Vector2i = wall_cells[i]
+		var hx: float = sin(float(i) * 12.9) * 437.5
+		var hz: float = sin(float(i) * 78.2) * 731.4
+		var jx: float = (hx - floorf(hx)) * 0.4 - 0.2
+		var jz: float = (hz - floorf(hz)) * 0.4 - 0.2
+		canopies.append(Transform3D(Basis(), Vector3((cell.x + 0.5) * cs + jx, wall_h + 0.5, (cell.y + 0.5) * cs + jz)))
+	_add_multimesh(canopy_mesh, _solid_mat(Color(0.13, 0.40, 0.13), 0.95), canopies, maze_node)
+
+	# Low bushes in dead-ends.
+	var bush_mesh := SphereMesh.new(); bush_mesh.radius = 0.5; bush_mesh.height = 0.7
+	var bushes: Array = []
+	for i in range(0, dead_ends.size(), 2):
+		var cell: Vector2i = dead_ends[i]
+		bushes.append(Transform3D(Basis(), Vector3((cell.x + 0.5) * cs, 0.3, (cell.y + 0.5) * cs)))
+	_add_multimesh(bush_mesh, _solid_mat(Color(0.10, 0.34, 0.12), 1.0), bushes, maze_node)
+
+# Village: weathered barrels and crates tucked into dead-ends.
+func _props_village(dead_ends: Array, cs: float, maze_node: Node3D) -> void:
+	var barrel_mesh := CylinderMesh.new()
+	barrel_mesh.top_radius = 0.30; barrel_mesh.bottom_radius = 0.34; barrel_mesh.height = 0.85
+	var barrels: Array = []
+	var crate_mesh := BoxMesh.new(); crate_mesh.size = Vector3(0.7, 0.7, 0.7)
+	var crates: Array = []
+	for i in range(dead_ends.size()):
+		var cell: Vector2i = dead_ends[i]
+		var pos := Vector3((cell.x + 0.5) * cs, 0.43, (cell.y + 0.5) * cs)
+		if i % 2 == 0:
+			barrels.append(Transform3D(Basis(), pos))
+		else:
+			crates.append(Transform3D(Basis(), Vector3(pos.x, 0.35, pos.z)))
+	_add_multimesh(barrel_mesh, _solid_mat(Color(0.40, 0.26, 0.13), 0.85), barrels, maze_node)
+	_add_multimesh(crate_mesh,  _solid_mat(Color(0.46, 0.33, 0.18), 0.9),  crates, maze_node)
+
 # ── Map materials ─────────────────────────────────────────────────────────────
 func _make_wall_material(map_id: int) -> Material:
 	var shader = Shader.new()
-	if map_id == 1:
+	if map_id == 2:
+		# Garage — corrugated sheet metal with rusty streaks.
+		shader.code = """
+shader_type spatial;
+void fragment() {
+	vec2 uv = UV * vec2(3.0, 7.0);
+	float rib = 0.5 + 0.5 * sin(uv.y * 6.2831);
+	vec3 metal = mix(vec3(0.28, 0.30, 0.34), vec3(0.46, 0.48, 0.52), rib);
+	float rust = fract(sin(floor(uv.x) * 12.9 + floor(uv.y * 0.5) * 4.1) * 43758.5);
+	metal = mix(metal, vec3(0.36, 0.18, 0.08), smoothstep(0.72, 1.0, rust) * 0.5);
+	ALBEDO = metal; METALLIC = 0.55; ROUGHNESS = 0.42;
+}
+"""
+	elif map_id == 3:
+		# Forest — dense hedge foliage.
+		shader.code = """
+shader_type spatial;
+void fragment() {
+	vec2 uv = UV * 7.0;
+	float n  = fract(sin(dot(floor(uv),       vec2(12.9, 78.2))) * 43758.5);
+	float n2 = fract(sin(dot(floor(uv * 2.3), vec2(39.3, 11.1))) * 9123.0);
+	vec3 leaf = mix(vec3(0.07, 0.26, 0.07), vec3(0.17, 0.46, 0.14), n);
+	leaf = mix(leaf, vec3(0.04, 0.16, 0.05), n2 * 0.55);
+	ALBEDO = leaf; ROUGHNESS = 0.95;
+}
+"""
+	elif map_id == 4:
+		# Village — weathered vertical wood planks.
+		shader.code = """
+shader_type spatial;
+void fragment() {
+	vec2 uv = UV * vec2(6.0, 2.0);
+	float plank = floor(uv.x);
+	float grain = 0.5 + 0.5 * sin(uv.y * 42.0 + plank * 1.7);
+	vec3 wood = mix(vec3(0.32, 0.21, 0.11), vec3(0.47, 0.31, 0.16),
+					fract(sin(plank * 23.1) * 43758.5));
+	wood *= (0.82 + 0.18 * grain);
+	float seam = smoothstep(0.44, 0.5, abs(fract(uv.x) - 0.5));
+	wood = mix(wood, vec3(0.12, 0.08, 0.04), seam * 0.6);
+	ALBEDO = wood; ROUGHNESS = 0.95;
+}
+"""
+	else:
+		# Labyrinth (1, default) — stone brickwork.
 		shader.code = """
 shader_type spatial;
 void fragment() {
@@ -214,24 +375,51 @@ void fragment() {
 	ROUGHNESS = 0.9;
 }
 """
-	else:
-		shader.code = """
-shader_type spatial;
-void fragment() {
-	vec2 uv = UV * 6.0;
-	float gx = floor(uv.x); float gy = floor(uv.y);
-	float noise = fract(sin(gx * 127.1 + gy * 311.7) * 43758.5);
-	vec3 ice_base = vec3(0.55, 0.75, 0.92); vec3 ice_dark = vec3(0.30, 0.55, 0.78);
-	ALBEDO    = mix(ice_dark, ice_base, noise);
-	ROUGHNESS = 0.05; METALLIC = 0.3; SPECULAR = 1.0;
-	EMISSION  = vec3(0.05, 0.10, 0.22);
-}
-"""
 	var mat = ShaderMaterial.new(); mat.shader = shader; return mat
 
 func _make_floor_material(map_id: int) -> Material:
 	var shader = Shader.new()
-	if map_id == 1:
+	if map_id == 2:
+		# Garage — poured concrete with oil stains.
+		shader.code = """
+shader_type spatial;
+void fragment() {
+	vec2 uv = UV * 8.0;
+	float n = fract(sin(dot(floor(uv), vec2(12.9, 78.2))) * 43758.5);
+	vec3 c = vec3(0.21, 0.21, 0.23) + (n - 0.5) * 0.05;
+	float oil = fract(sin(dot(floor(uv * 0.5), vec2(31.7, 11.3))) * 2375.0);
+	c = mix(c, vec3(0.05, 0.05, 0.07), smoothstep(0.84, 1.0, oil) * 0.8);
+	ALBEDO = c; ROUGHNESS = 0.7; METALLIC = 0.1;
+}
+"""
+	elif map_id == 3:
+		# Forest — grass with worn dirt patches.
+		shader.code = """
+shader_type spatial;
+void fragment() {
+	vec2 uv = UV * 11.0;
+	float n = fract(sin(dot(floor(uv), vec2(12.9, 78.2))) * 43758.5);
+	vec3 grass = mix(vec3(0.11, 0.31, 0.09), vec3(0.21, 0.46, 0.14), n);
+	float dirt = fract(sin(dot(floor(uv * 0.4), vec2(27.1, 9.7))) * 1551.0);
+	grass = mix(grass, vec3(0.33, 0.25, 0.13), smoothstep(0.78, 1.0, dirt) * 0.7);
+	ALBEDO = grass; ROUGHNESS = 1.0;
+}
+"""
+	elif map_id == 4:
+		# Village — packed dirt with scattered cobbles.
+		shader.code = """
+shader_type spatial;
+void fragment() {
+	vec2 uv = UV * 9.0;
+	float n = fract(sin(dot(floor(uv), vec2(12.9, 78.2))) * 43758.5);
+	vec3 dirt = mix(vec3(0.29, 0.23, 0.15), vec3(0.19, 0.15, 0.10), n);
+	float stone = smoothstep(0.74, 0.80, abs(fract(uv.x) - 0.5) + abs(fract(uv.y) - 0.5));
+	dirt = mix(dirt, vec3(0.34, 0.33, 0.30), stone * 0.45);
+	ALBEDO = dirt; ROUGHNESS = 1.0;
+}
+"""
+	else:
+		# Labyrinth (1, default) — stone checker tiles.
 		shader.code = """
 shader_type spatial;
 void fragment() {
@@ -244,29 +432,26 @@ void fragment() {
 	ALBEDO = col; ROUGHNESS = 1.0;
 }
 """
-	else:
-		shader.code = """
-shader_type spatial;
-void fragment() {
-	vec2 uv = UV * 10.0;
-	float gx = floor(uv.x); float gy = floor(uv.y);
-	float noise = fract(sin(gx * 53.7 + gy * 127.3) * 43758.5);
-	float crack = step(0.93, noise);
-	vec3 col = mix(vec3(0.75, 0.88, 0.98), vec3(0.55, 0.72, 0.88), noise * 0.5);
-	col = mix(col, vec3(0.3, 0.4, 0.55), crack);
-	ALBEDO = col; ROUGHNESS = 0.08; METALLIC = 0.1; SPECULAR = 1.0;
-}
-"""
 	var mat = ShaderMaterial.new(); mat.shader = shader; return mat
 
 func _make_ceiling_material(map_id: int) -> Material:
 	var mat = StandardMaterial3D.new()
-	if map_id == 1:
-		mat.albedo_color = Color(0.12, 0.12, 0.15); mat.roughness = 1.0
+	if map_id == 2:
+		# Garage — dark concrete soffit (lit by fluorescent prop bars).
+		mat.albedo_color = Color(0.14, 0.14, 0.16); mat.roughness = 1.0
+	elif map_id == 3:
+		# Forest — bright open daytime sky (emissive so it reads as "outside").
+		mat.albedo_color = Color(0.46, 0.66, 0.96); mat.roughness = 1.0
+		mat.emission_enabled = true; mat.emission = Color(0.50, 0.68, 0.98)
+		mat.emission_energy_multiplier = 0.9
+	elif map_id == 4:
+		# Village — warm dusk sky.
+		mat.albedo_color = Color(0.40, 0.28, 0.30); mat.roughness = 1.0
+		mat.emission_enabled = true; mat.emission = Color(0.55, 0.32, 0.20)
+		mat.emission_energy_multiplier = 0.45
 	else:
-		mat.albedo_color = Color(0.25, 0.40, 0.60); mat.roughness = 0.3; mat.metallic = 0.2
-		mat.emission_enabled = true; mat.emission = Color(0.05, 0.10, 0.20)
-		mat.emission_energy_multiplier = 0.5
+		# Labyrinth (1, default) — dark stone ceiling.
+		mat.albedo_color = Color(0.12, 0.12, 0.15); mat.roughness = 1.0
 	return mat
 
 # ── Lighting ──────────────────────────────────────────────────────────────────
@@ -276,12 +461,22 @@ func _create_lighting() -> void:
 	var world_env = WorldEnvironment.new()
 	var env = Environment.new()
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
-	if Config.selected_map == 1:
-		dir_light.light_color = Color(1.0, 0.85, 0.65); dir_light.light_energy = 0.5
-		env.ambient_light_color = Color(0.35, 0.30, 0.25); env.ambient_light_energy = 1.0
-	else:
-		dir_light.light_color = Color(0.65, 0.80, 1.0); dir_light.light_energy = 0.4
-		env.ambient_light_color = Color(0.22, 0.30, 0.45); env.ambient_light_energy = 1.3
+	match Config.selected_map:
+		2:  # Garage — cool, hazy fluorescent interior
+			dir_light.light_color = Color(0.85, 0.90, 1.0); dir_light.light_energy = 0.35
+			env.ambient_light_color = Color(0.26, 0.28, 0.32); env.ambient_light_energy = 1.1
+			env.fog_enabled = true; env.fog_light_color = Color(0.30, 0.32, 0.36); env.fog_density = 0.020
+		3:  # Forest — bright daylight, soft green distance haze
+			dir_light.light_color = Color(1.0, 0.97, 0.85); dir_light.light_energy = 0.9
+			env.ambient_light_color = Color(0.42, 0.52, 0.40); env.ambient_light_energy = 1.4
+			env.fog_enabled = true; env.fog_light_color = Color(0.55, 0.70, 0.55); env.fog_density = 0.015
+		4:  # Village — warm dusk, dusty amber haze
+			dir_light.light_color = Color(1.0, 0.62, 0.38); dir_light.light_energy = 0.55
+			env.ambient_light_color = Color(0.34, 0.26, 0.24); env.ambient_light_energy = 1.05
+			env.fog_enabled = true; env.fog_light_color = Color(0.45, 0.32, 0.24); env.fog_density = 0.025
+		_:  # Labyrinth (1, default) — warm torchlit stone
+			dir_light.light_color = Color(1.0, 0.85, 0.65); dir_light.light_energy = 0.5
+			env.ambient_light_color = Color(0.35, 0.30, 0.25); env.ambient_light_energy = 1.0
 	add_child(dir_light)
 	world_env.environment = env; add_child(world_env)
 
