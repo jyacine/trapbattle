@@ -17,7 +17,7 @@ const MAPS: Array = [
 	{"id": 1, "name": "Labyrinth",  "desc": "Stone dungeon"},
 	{"id": 2, "name": "Garage",     "desc": "Concrete & steel"},
 	{"id": 3, "name": "Forest",     "desc": "Hedgerows & sky"},
-	{"id": 4, "name": "Village",    "desc": "Abandoned, at dusk"},
+	{"id": 4, "name": "Village",    "desc": "Haunted, moonlit fog"},
 	{"id": 5, "name": "Canyon",     "desc": "Open rocky badlands"},
 ]
 
