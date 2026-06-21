@@ -90,23 +90,20 @@ var _local_speaking: bool = false    # current VAD state for the local mic
 var _enc_predictor: int = 0
 var _enc_index:     int = 0
 
-# Capture-rate auto-calibration.
-# AudioServer.get_mix_rate() on iOS/web can diverge from what AudioEffectCapture
-# actually delivers (commonly returns 48000 while frames arrive at 24000 Hz),
-# causing step = 2 in the resampler → every other sample discarded → receiver
-# plays the audio at 2× speed (the "minion voice" effect).
-# We skip the first few calls (startup buffer drain) then measure the next
-# _RATE_CAL_CALLS packets to get the true steady-state frame arrival rate.
-# IMPORTANT: divide by ACTUAL elapsed wall-clock time, NOT by calls×SEND_INTERVAL.
-# The browser game loop runs at its own fps (often 30 fps = 33 ms/frame), so the
-# timer fires every 33 ms instead of 20 ms. Using nominal SEND_INTERVAL inflated
-# the measured rate to 79 kHz / 61 kHz and caused 1.6× pitch-up at the receiver.
-const _RATE_CAL_SKIP  := 5            # discard first 5 calls (startup backlog)
-const _RATE_CAL_CALLS := 20           # then measure over ~0.4–0.7 s of real time
+# Capture-rate: use AudioServer.get_mix_rate() — the authoritative browser audio rate.
+# We previously tried frame-count calibration but AudioEffectCapture.get_frames_available()
+# in the Godot Web export is unreliable: it returns 0 most ticks and delivers batches,
+# so any frame-counting approach produces wildly wrong values (15 kHz, 29 kHz, 79 kHz).
+# get_mix_rate() consistently returns the correct browser rate (48000 Hz in all observed
+# sessions). _capture_rate is set once in _setup_mic() and never changed.
+# Kept for diagnostic: we still observe frame counts to log what calibration would have
+# measured — helpful for spotting browsers that genuinely lie about get_mix_rate().
+const _RATE_CAL_SKIP  := 5
+const _RATE_CAL_CALLS := 20
 var _rate_cal_skipped: int = 0
 var _rate_cal_frames:  int = 0
 var _rate_cal_done:    int = 0
-var _rate_cal_t0:      int = -1       # wall-clock ms at start of measurement window
+var _rate_cal_t0:      int = -1
 
 # Streaming resampler state. The mic is read in ~20 ms chunks; resampling each
 # chunk independently (the old code) dropped a fractional sample and reset the
@@ -278,18 +275,18 @@ func _capture_and_send() -> void:
 		_rate_cal_skipped += 1
 	elif _rate_cal_done < _RATE_CAL_CALLS:
 		if _rate_cal_t0 < 0:
-			_rate_cal_t0 = Time.get_ticks_msec()   # start wall-clock at first real call
+			_rate_cal_t0 = Time.get_ticks_msec()
 		_rate_cal_frames += available
 		_rate_cal_done   += 1
 		if _rate_cal_done == _RATE_CAL_CALLS:
-			# Divide by ACTUAL elapsed time so the game-loop fps doesn't corrupt the result.
+			# Log-only: frame counting is unreliable in the Web export (AudioEffectCapture
+			# returns 0 most ticks and delivers batches, inflating or shrinking the divisor).
+			# We trust get_mix_rate() instead and never write _capture_rate here.
 			var elapsed_ms := float(Time.get_ticks_msec() - _rate_cal_t0)
 			var measured := float(_rate_cal_frames) / maxf(elapsed_ms * 0.001, 0.001)
 			if measured > 8000.0 and measured < 200000.0 and absf(measured - _capture_rate) > 2000.0:
-				push_warning("[voice] capture rate corrected %.0f → %.0f Hz (%.0f frames over %.0f ms)" % [
-					_capture_rate, measured, _rate_cal_frames, elapsed_ms])
-				_capture_rate = measured
-				_resample_reset()
+				push_warning("[voice] frame-count measured %.0f Hz; using get_mix_rate()=%.0f Hz (%.0f frames / %.0f ms)" % [
+					measured, _capture_rate, _rate_cal_frames, elapsed_ms])
 
 	var frames = _mic_capture.get_buffer(available)
 
@@ -602,14 +599,17 @@ func _send_diag() -> void:
 		var playing: bool = bool(_jq_play.get(pid, false))
 		jitter_info += " peer%d:q%dms(%s)" % [pid, queued_ms, "play" if playing else "prebuf"]
 
-	var cal_state := "pending" if _rate_cal_done < _RATE_CAL_CALLS else "done"
-	var payload := "peer=%d path=%s ch=%s mix=%.0fHz cap=%.0fHz(%s) tx_rtc=%d tx_ws=%d underruns=%d jitter=[%s]" % [
+	var cal_str := "pending"
+	if _rate_cal_done >= _RATE_CAL_CALLS and _rate_cal_t0 >= 0:
+		var elapsed_ms := float(Time.get_ticks_msec() - _rate_cal_t0)
+		var measured := float(_rate_cal_frames) / maxf(elapsed_ms * 0.001, 0.001)
+		cal_str = "%.0fHz" % measured
+	var payload := "peer=%d path=%s ch=%s cap=%.0fHz cal=%s tx_rtc=%d tx_ws=%d underruns=%d jitter=[%s]" % [
 		multiplayer.get_unique_id(),
 		"UDP/DataChannel" if _rtc_open else "WebSocket",
 		ch_state,
-		AudioServer.get_mix_rate(),
 		_capture_rate,
-		cal_state,
+		cal_str,
 		_diag_tx_rtc, _diag_tx_ws, _diag_underrun,
 		jitter_info.strip_edges()
 	]
