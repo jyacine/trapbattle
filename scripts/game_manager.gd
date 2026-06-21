@@ -4,6 +4,8 @@ class_name GameManager
 
 signal player_damaged(victim_pid: int, attacker_pid: int, amount: int)
 
+const _MapLoader = preload("res://scripts/map_loader.gd")
+
 # ── Maze data ───────────────────────────────────────────────────────────────
 var grid: Array
 var spawns: Array        # Array of [col, row] — up to MAX_PLAYERS spawn points
@@ -63,10 +65,24 @@ func _init() -> void:
 	if Config.maze_seed != 0:
 		seed(Config.maze_seed)
 
-	var gen  = MazeGenerator.new()
-	grid     = gen.generate_maze(Config.MAZE_COLS, Config.MAZE_ROWS, Config.EXTRA_PASSAGES)
+	var gen = MazeGenerator.new()
+
+	# Map 6 = fixed real-village layout from PNG mask.
+	if Config.selected_map == 6:
+		grid = _MapLoader.load_mask_to_grid(
+			"res://maps/village_mask.png",
+			Config.MAZE_COLS,
+			Config.MAZE_ROWS
+		)
+		# Fallback to procedural if file missing/invalid.
+		if grid.is_empty():
+			push_warning("Village mask load failed, falling back to procedural maze.")
+			grid = gen.generate_maze(Config.MAZE_COLS, Config.MAZE_ROWS, Config.EXTRA_PASSAGES)
+	else:
+		grid = gen.generate_maze(Config.MAZE_COLS, Config.MAZE_ROWS, Config.EXTRA_PASSAGES)
+
 	var data = gen.pick_spawns(grid, Config.MAX_PLAYERS)
-	spawns      = data["spawns"]
+	spawns       = data["spawns"]
 	player_start = spawns[0] if spawns.size() > 0 else [1, 1]
 	robot_start  = spawns[1] if spawns.size() > 1 else player_start
 	box_spawns   = data["boxes"]
