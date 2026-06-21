@@ -411,8 +411,8 @@ func _props_village_real(wall_cells: Array, dead_ends: Array, grid: Array, rows:
 	# One wagon near the central plaza.
 	if wagon_scene != null:
 		var cc := cols / 2; var cr := rows / 2
-		for dc in [2, -2, 3, -3, 1, -1]:
-			var tc := cc + dc
+		for dc: int in [2, -2, 3, -3, 1, -1]:
+			var tc: int = cc + dc
 			if tc >= 0 and tc < cols and grid[cr][tc] == 0:
 				var inst := wagon_scene.instantiate() as Node3D
 				inst.position = Vector3((tc + 0.5) * cs, 0.0, (cr + 0.5) * cs)
