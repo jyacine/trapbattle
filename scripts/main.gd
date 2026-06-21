@@ -11,6 +11,8 @@ var _players: Dictionary = {}
 
 # ────────────────────────────────────────────────────────────────────────────
 func _ready() -> void:
+	get_tree().debug_collisions_hint = false   # never show collision wireframes in-game
+
 	network_manager = NetworkManager.new()
 	network_manager.name = "NetworkManager"
 	add_child(network_manager)
