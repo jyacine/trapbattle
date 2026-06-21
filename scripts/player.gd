@@ -57,7 +57,6 @@ const THROW_SPEED     := 11.0   # initial throw velocity (m/s) along the aim ray
 const THROW_GRAVITY   := 17.0   # arc gravity (game-y, snappier than 9.8)
 const THROW_DT        := 0.03   # arc integration step (s)
 const THROW_MAX_STEPS := 70     # ~2.1 s max flight before giving up
-const THROW_WALL_H    := 3.0    # wall height — arc can pass over walls above this Y
 var _traj_target_pos: Vector3   = Vector3.ZERO   # exact arc-landing world position
 
 # ── Gun system (2 slots) ─────────────────────────────────────────────────────
@@ -147,7 +146,7 @@ var _vm_recoil:      float  = 0.0
 
 # ── Jump ─────────────────────────────────────────────────────────────────────
 var _jump_vel: float = 0.0
-const JUMP_SPEED   := 5.5
+const JUMP_SPEED   := 7.0    # peak height ≈ 1.75 m — clears 0.9 m fence and lands on 0.75 m crates
 const JUMP_GRAVITY := 14.0
 
 # ── Debug overlay (toggle with F3; on by default so it shows on mobile) ────────
@@ -380,9 +379,17 @@ func _physics_process(delta: float) -> void:
 		if dir.length() > 1.0:
 			dir = dir.normalized()
 
-		# Physics-driven movement: smooth wall sliding, no jitter.
+		# Physics-driven movement: wall sliding (XZ) + jump arc gravity (Y).
+		# Gravity runs here so the player falls correctly when walking off a prop.
+		if _jump_vel != 0.0 or position.y > 0.01:
+			_jump_vel -= JUMP_GRAVITY * delta
 		velocity = dir * move_speed * speed_mult * sprint_mult
+		velocity.y = _jump_vel
 		move_and_slide()
+		_jump_vel = velocity.y   # zeroed by move_and_slide when landing on a prop surface
+		if position.y < 0.0:    # floor snap — no StaticBody3D at y = 0
+			position.y = 0.0
+			if _jump_vel < 0.0: _jump_vel = 0.0
 		_dbg_slides     = get_slide_collision_count()
 		_dbg_real_speed = velocity.length()
 
@@ -415,13 +422,6 @@ func _physics_process(delta: float) -> void:
 			_cancel_trap_aim()
 		else:
 			_update_trap_aim()
-
-	# Jump arc: manual Y velocity separate from move_and_slide() horizontal movement.
-	if _jump_vel != 0.0 or position.y > 0.01:
-		_jump_vel -= JUMP_GRAVITY * delta
-		position.y = maxf(0.0, position.y + _jump_vel * delta)
-		if position.y <= 0.0:
-			_jump_vel = 0.0
 
 	if multiplayer.has_multiplayer_peer():
 		_net_pos.rpc(position, yaw)
@@ -690,7 +690,6 @@ func _update_trap_aim() -> void:
 	if mat: mat.albedo_color = Color(col.r, col.g, col.b, 0.85)
 
 # Integrate a simple ballistic arc from the eye along the aim ray.
-# The arc can pass OVER walls when its Y exceeds THROW_WALL_H (wall top height).
 # Returns {points, cell: landing grid cell, landing_pos: exact world Vector3}.
 func _compute_throw_arc() -> Dictionary:
 	var origin: Vector3 = camera_node.global_position
@@ -707,9 +706,8 @@ func _compute_throw_arc() -> Dictionary:
 		t += THROW_DT
 		p = origin + v0 * t + Vector3(0.0, -0.5 * THROW_GRAVITY * t * t, 0.0)
 		var cell := game_manager.world_to_grid(p)
-		# Only treat a wall cell as a blocker when the arc is below wall height.
-		if not game_manager.is_floor(cell[0], cell[1]) and p.y < THROW_WALL_H:
-			# Arc hits a wall at ground level — stop at last valid point.
+		if not game_manager.is_floor(cell[0], cell[1]):
+			# Arc hits a wall — land at the last floor position before the wall.
 			var pc := game_manager.world_to_grid(prev)
 			if game_manager.is_floor(pc[0], pc[1]):
 				landing     = pc
