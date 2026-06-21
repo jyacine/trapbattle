@@ -789,14 +789,11 @@ func _net_gun_type(gtype: int) -> void:
 		_remote_gun_mi.visible = (gtype >= 0)
 
 # ── Remote body ───────────────────────────────────────────────────────────────
-func _build_remote_body() -> void:
-	_remote_body_root = Node3D.new()
-	add_child(_remote_body_root)
-
-	var pc  = Config.PLAYER_COLORS[player_index % Config.PLAYER_COLORS.size()]
-	var bm  = StandardMaterial3D.new()
+func _build_player_mesh_body(parent: Node3D) -> void:
+	var pc = Config.PLAYER_COLORS[player_index % Config.PLAYER_COLORS.size()]
+	var bm = StandardMaterial3D.new()
 	bm.albedo_color = pc.darkened(0.35); bm.metallic = 0.8; bm.roughness = 0.3
-	var am  = StandardMaterial3D.new()
+	var am = StandardMaterial3D.new()
 	am.albedo_color = pc; am.emission_enabled = true
 	am.emission = pc; am.emission_energy_multiplier = 0.8
 	am.metallic = 1.0; am.roughness = 0.1
@@ -813,7 +810,14 @@ func _build_remote_body() -> void:
 	for p in parts:
 		var box = CSGBox3D.new()
 		box.size = p[0]; box.position = p[1]; box.material = p[2]
-		_remote_body_root.add_child(box)
+		parent.add_child(box)
+
+func _build_remote_body() -> void:
+	_remote_body_root = Node3D.new()
+	add_child(_remote_body_root)
+
+	var pc = Config.PLAYER_COLORS[player_index % Config.PLAYER_COLORS.size()]
+	_build_player_mesh_body(_remote_body_root)
 
 	# Gun held in right hand — hidden until opponent picks one up.
 	var gm = StandardMaterial3D.new()
@@ -1011,24 +1015,7 @@ func _end_death_replay() -> void:
 
 func _make_replay_avatar() -> Node3D:
 	var root := Node3D.new()
-	var pc: Color = Config.PLAYER_COLORS[player_index % Config.PLAYER_COLORS.size()]
-	var mat := StandardMaterial3D.new()
-	mat.albedo_color = pc
-	mat.emission_enabled = true; mat.emission = pc; mat.emission_energy_multiplier = 0.7
-	mat.metallic = 0.4; mat.roughness = 0.4
-	# Body capsule
-	var body := MeshInstance3D.new()
-	var cap := CapsuleMesh.new(); cap.radius = 0.30; cap.height = 1.6
-	body.mesh = cap; body.set_surface_override_material(0, mat)
-	body.position = Vector3(0, 0.9, 0)
-	root.add_child(body)
-	# Forward-pointing nose cone (shows facing direction from above)
-	var nose := MeshInstance3D.new()
-	var cone := CylinderMesh.new(); cone.top_radius = 0.0; cone.bottom_radius = 0.20; cone.height = 0.5
-	nose.mesh = cone; nose.set_surface_override_material(0, mat)
-	nose.rotation = Vector3(-PI / 2.0, 0, 0)   # +Y → -Z (player forward)
-	nose.position = Vector3(0, 0.9, -0.55)
-	root.add_child(nose)
+	_build_player_mesh_body(root)
 	return root
 
 # ── Viewmodel ─────────────────────────────────────────────────────────────────
