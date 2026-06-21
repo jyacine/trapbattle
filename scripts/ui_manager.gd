@@ -83,6 +83,7 @@ var _joy_knob_nd: Panel   = null
 var _look_id:          int     = -1
 var _look_prev:        Vector2 = Vector2.ZERO
 var _look_prev_fire:   Vector2 = Vector2.ZERO   # track fire-drag position for turn-while-firing
+var _look_prev_trap:   Vector2 = Vector2.ZERO   # track trap-drag position for aim-while-holding
 
 var _fire_nd:       Panel = null
 var _trap_nd:       Panel = null
@@ -833,33 +834,24 @@ func _build_mobile_buttons() -> void:
 	_fire_nd.offset_top    = -FSZ * 0.5; _fire_nd.offset_bottom = FSZ * 0.5
 	add_child(_fire_nd)
 
-	# TRAP button — bomb icon, right edge column
-	_trap_nd = _action_image_button(TSZ, "res://assets/icons/icon_bomb.svg")
-	_trap_nd.anchor_left   = 1.0; _trap_nd.anchor_right  = 1.0
-	_trap_nd.anchor_top    = ACT_ANCHOR; _trap_nd.anchor_bottom = ACT_ANCHOR
-	_trap_nd.offset_left   = -(TSZ + MG); _trap_nd.offset_right  = -MG
-	_trap_nd.offset_top    = -(FSZ * 0.5 + MG + TSZ); _trap_nd.offset_bottom = -(FSZ * 0.5 + MG)
-	add_child(_trap_nd)
-
-	# SWITCH GUN button — above trap button, same right column
-	const SGZ := 56.0
-	_switch_gun_nd = _action_image_button(SGZ, "res://assets/icons/icon_gun.svg")
-	_switch_gun_nd.anchor_left   = 1.0; _switch_gun_nd.anchor_right  = 1.0
-	_switch_gun_nd.anchor_top    = ACT_ANCHOR; _switch_gun_nd.anchor_bottom = ACT_ANCHOR
-	_switch_gun_nd.offset_left   = -(SGZ + MG); _switch_gun_nd.offset_right  = -MG
-	_switch_gun_nd.offset_top    = -(FSZ * 0.5 + MG + TSZ + MG + SGZ)
-	_switch_gun_nd.offset_bottom = -(FSZ * 0.5 + MG + TSZ + MG)
-	add_child(_switch_gun_nd)
-
-	# JUMP button — above switch-gun, right column, smaller
-	const JZ := 44.0
+	# JUMP button — right column, at fire level (bottom of the action stack)
+	# Tap to jump; positioned beside the fire button so it's easy to reach.
+	const JZ := 60.0
 	_jump_nd = _action_image_button(JZ, "res://assets/icons/icon_jump.svg")
 	_jump_nd.anchor_left   = 1.0; _jump_nd.anchor_right  = 1.0
 	_jump_nd.anchor_top    = ACT_ANCHOR; _jump_nd.anchor_bottom = ACT_ANCHOR
 	_jump_nd.offset_left   = -(JZ + MG); _jump_nd.offset_right  = -MG
-	_jump_nd.offset_top    = -(FSZ * 0.5 + MG + TSZ + MG + SGZ + MG + JZ)
-	_jump_nd.offset_bottom = -(FSZ * 0.5 + MG + TSZ + MG + SGZ + MG)
+	_jump_nd.offset_top    = -(JZ * 0.5); _jump_nd.offset_bottom = JZ * 0.5
 	add_child(_jump_nd)
+
+	# TRAP button — above jump button, right column
+	_trap_nd = _action_image_button(TSZ, "res://assets/icons/icon_bomb.svg")
+	_trap_nd.anchor_left   = 1.0; _trap_nd.anchor_right  = 1.0
+	_trap_nd.anchor_top    = ACT_ANCHOR; _trap_nd.anchor_bottom = ACT_ANCHOR
+	_trap_nd.offset_left   = -(TSZ + MG); _trap_nd.offset_right  = -MG
+	_trap_nd.offset_top    = -(JZ * 0.5 + MG + TSZ); _trap_nd.offset_bottom = -(JZ * 0.5 + MG)
+	add_child(_trap_nd)
+
 
 # Mic mute/unmute toggle. Built for every multiplayer client (desktop + mobile
 # web), not just touch — on desktop you can also press V. Placed on the mid-left
@@ -1081,12 +1073,6 @@ func _update_inventory_bar() -> void:
 			_active_trap_dot.visible = false
 			_active_label.visible = false
 
-	# Keep switch-gun touch button icon in sync with equipped gun
-	if _switch_gun_nd != null:
-		var tr = _switch_gun_nd.get_child(0) as TextureRect
-		if tr:
-			var icon_path: String = GUN_ICONS[player.gun_type] if player.gun_type >= 0 else "res://assets/icons/icon_gun.svg"
-			tr.texture = load(icon_path)
 
 func _circle_panel(size: float, fill: Color, border: Color, bw: int) -> Panel:
 	var p = Panel.new()
@@ -1215,14 +1201,9 @@ func _input(event: InputEvent) -> void:
 					return
 				if _trap_nd != null and _trap_nd.get_global_rect().has_point(pos) and _trap_id == -1:
 					_trap_id = event.index
+					_look_prev_trap = pos
 					_trap_nd.modulate = Color(1.5, 1.5, 1.5)
-					player._try_place()
-					get_viewport().set_input_as_handled()
-					return
-				if _switch_gun_nd != null and _switch_gun_nd.get_global_rect().has_point(pos) and _switch_gun_id == -1:
-					_switch_gun_id = event.index
-					_switch_gun_nd.modulate = Color(1.5, 1.5, 1.5)
-					_open_wheel()
+					player._begin_trap_aim()   # show arc; drag to aim, release to throw
 					get_viewport().set_input_as_handled()
 					return
 				if _jump_nd != null and _jump_nd.get_global_rect().has_point(pos) and _jump_id == -1:
@@ -1253,10 +1234,7 @@ func _input(event: InputEvent) -> void:
 			elif event.index == _trap_id:
 				_trap_id = -1
 				if _trap_nd: _trap_nd.modulate = Color(1, 1, 1)
-				get_viewport().set_input_as_handled()
-			elif event.index == _switch_gun_id:
-				_switch_gun_id = -1
-				if _switch_gun_nd: _switch_gun_nd.modulate = Color(1, 1, 1)
+				player._release_trap_aim()   # throws at the aimed cell
 				get_viewport().set_input_as_handled()
 			elif event.index == _jump_id:
 				_jump_id = -1
@@ -1293,6 +1271,17 @@ func _input(event: InputEvent) -> void:
 			var dx := clampf(drag.position.x - _look_prev_fire.x, -60.0, 60.0)
 			var dy := clampf(drag.position.y - _look_prev_fire.y, -60.0, 60.0)
 			_look_prev_fire = drag.position
+			player._pending_yaw_delta -= dx * sens
+			player.pitch = clamp(player.pitch - dy * sens, -PI / 3.0, PI / 3.0)
+			if player.camera_node:
+				player.camera_node.rotation.x = player.pitch
+			get_viewport().set_input_as_handled()
+		elif event.index == _trap_id:
+			# Dragging while holding trap button steers the aim arc
+			var sens: float = player.mouse_sensitivity * 2.6
+			var dx := clampf(drag.position.x - _look_prev_trap.x, -60.0, 60.0)
+			var dy := clampf(drag.position.y - _look_prev_trap.y, -60.0, 60.0)
+			_look_prev_trap = drag.position
 			player._pending_yaw_delta -= dx * sens
 			player.pitch = clamp(player.pitch - dy * sens, -PI / 3.0, PI / 3.0)
 			if player.camera_node:
