@@ -32,13 +32,19 @@ const MIC_BUS         := "VoiceMic"
 # than TCP. Constants are tuned for UDP: smaller target/prebuf → lower latency.
 # If voice falls back to WebSocket the buffer may underrun more often under burst
 # loss, but that path already has higher latency so the trade-off is acceptable.
-const GEN_BUFFER_LEN := 0.12    # AudioStreamGenerator internal buffer (s)  was 0.25
-const JITTER_TARGET  := 0.03    # keep ~30 ms buffered in the generator       was 0.10
-const JITTER_PREBUF  := 0.06    # accumulate 60 ms before (re)starting playout was 0.08
-const JITTER_MAX     := 0.15    # cap queued audio at 150 ms                   was 0.25
-# Silence padding on underrun: instead of going silent while waiting for JITTER_PREBUF,
-# push zeros so the generator keeps running and the restart is inaudible.
-const JITTER_SILENCE_PAD := 0.06  # seconds of zeros to push on each underrun restart
+const GEN_BUFFER_LEN := 0.12    # AudioStreamGenerator internal buffer (s)
+const JITTER_TARGET  := 0.06    # keep ~60 ms buffered in the generator
+# WHY 60 ms: pump runs once per game frame. At 25 fps (40 ms/frame) the generator
+# drains 24000×0.04=960 frames/frame. We must push that much back, so deficit must
+# be ≥ 960. deficit = target − buffered_after_drain = target − (target−960) = 960.
+# That only holds while target > drain/frame, i.e. target > VOICE_RATE/fps.
+# At 25 fps: 24000/25=960 frames=40 ms. At 17 fps: ~1400 frames=58 ms.
+# 60 ms (1440 frames) keeps the queue stable down to ~17 fps.
+const JITTER_PREBUF  := 0.03    # accumulate 30 ms before (re)starting playout
+const JITTER_MAX     := 0.15    # cap queued audio at 150 ms
+# Silence padding on underrun: push zeros so the generator keeps running (avoids
+# click) and the restart is inaudible; 30 ms matches the new JITTER_PREBUF.
+const JITTER_SILENCE_PAD := 0.03  # seconds of zeros to push on each underrun restart
 
 # ── WebRTC DataChannel transport (UDP — off the TCP/WebSocket plane) ──────────
 # When enabled, voice flows over an UNRELIABLE/UNORDERED WebRTC DataChannel to the
@@ -100,10 +106,11 @@ var _enc_index:     int = 0
 # measured — helpful for spotting browsers that genuinely lie about get_mix_rate().
 const _RATE_CAL_SKIP  := 5
 const _RATE_CAL_CALLS := 20
-var _rate_cal_skipped: int = 0
-var _rate_cal_frames:  int = 0
-var _rate_cal_done:    int = 0
-var _rate_cal_t0:      int = -1
+var _rate_cal_skipped:  int   = 0
+var _rate_cal_frames:   int   = 0
+var _rate_cal_done:     int   = 0
+var _rate_cal_t0:       int   = -1
+var _rate_cal_measured: float = -1.0   # stored once when calibration window closes
 
 # Streaming resampler state. The mic is read in ~20 ms chunks; resampling each
 # chunk independently (the old code) dropped a fractional sample and reset the
@@ -283,10 +290,10 @@ func _capture_and_send() -> void:
 			# returns 0 most ticks and delivers batches, inflating or shrinking the divisor).
 			# We trust get_mix_rate() instead and never write _capture_rate here.
 			var elapsed_ms := float(Time.get_ticks_msec() - _rate_cal_t0)
-			var measured := float(_rate_cal_frames) / maxf(elapsed_ms * 0.001, 0.001)
-			if measured > 8000.0 and measured < 200000.0 and absf(measured - _capture_rate) > 2000.0:
+			_rate_cal_measured = float(_rate_cal_frames) / maxf(elapsed_ms * 0.001, 0.001)
+			if _rate_cal_measured > 8000.0 and _rate_cal_measured < 200000.0 and absf(_rate_cal_measured - _capture_rate) > 2000.0:
 				push_warning("[voice] frame-count measured %.0f Hz; using get_mix_rate()=%.0f Hz (%.0f frames / %.0f ms)" % [
-					measured, _capture_rate, _rate_cal_frames, elapsed_ms])
+					_rate_cal_measured, _capture_rate, _rate_cal_frames, elapsed_ms])
 
 	var frames = _mic_capture.get_buffer(available)
 
@@ -600,10 +607,8 @@ func _send_diag() -> void:
 		jitter_info += " peer%d:q%dms(%s)" % [pid, queued_ms, "play" if playing else "prebuf"]
 
 	var cal_str := "pending"
-	if _rate_cal_done >= _RATE_CAL_CALLS and _rate_cal_t0 >= 0:
-		var elapsed_ms := float(Time.get_ticks_msec() - _rate_cal_t0)
-		var measured := float(_rate_cal_frames) / maxf(elapsed_ms * 0.001, 0.001)
-		cal_str = "%.0fHz" % measured
+	if _rate_cal_measured >= 0.0:
+		cal_str = "%.0fHz" % _rate_cal_measured
 	var payload := "peer=%d path=%s ch=%s cap=%.0fHz cal=%s tx_rtc=%d tx_ws=%d underruns=%d jitter=[%s]" % [
 		multiplayer.get_unique_id(),
 		"UDP/DataChannel" if _rtc_open else "WebSocket",
