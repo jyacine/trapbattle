@@ -57,7 +57,6 @@ const THROW_SPEED     := 11.0   # initial throw velocity (m/s) along the aim ray
 const THROW_GRAVITY   := 17.0   # arc gravity (game-y, snappier than 9.8)
 const THROW_DT        := 0.03   # arc integration step (s)
 const THROW_MAX_STEPS := 70     # ~2.1 s max flight before giving up
-const THROW_WALL_H    := 3.0    # wall height — arc can pass over walls above this Y
 var _traj_target_pos: Vector3   = Vector3.ZERO   # exact arc-landing world position
 
 # ── Gun system (2 slots) ─────────────────────────────────────────────────────
@@ -690,7 +689,7 @@ func _update_trap_aim() -> void:
 	if mat: mat.albedo_color = Color(col.r, col.g, col.b, 0.85)
 
 # Integrate a simple ballistic arc from the eye along the aim ray.
-# The arc can pass OVER walls when its Y exceeds THROW_WALL_H (wall top height).
+# Walls do not block the arc — traps can be thrown over or behind walls.
 # Returns {points, cell: landing grid cell, landing_pos: exact world Vector3}.
 func _compute_throw_arc() -> Dictionary:
 	var origin: Vector3 = camera_node.global_position
@@ -700,33 +699,34 @@ func _compute_throw_arc() -> Dictionary:
 	pts.append(origin)
 	var landing: Array = current_grid_pos
 	var landing_pos := origin
+	var last_floor: Array = current_grid_pos
+	var last_floor_pos := origin
 	var p := origin
 	var t := 0.0
 	for i in THROW_MAX_STEPS:
-		var prev := p
 		t += THROW_DT
 		p = origin + v0 * t + Vector3(0.0, -0.5 * THROW_GRAVITY * t * t, 0.0)
 		var cell := game_manager.world_to_grid(p)
-		# Only treat a wall cell as a blocker when the arc is below wall height.
-		if not game_manager.is_floor(cell[0], cell[1]) and p.y < THROW_WALL_H:
-			# Arc hits a wall at ground level — stop at last valid point.
-			var pc := game_manager.world_to_grid(prev)
-			if game_manager.is_floor(pc[0], pc[1]):
-				landing     = pc
-				landing_pos = Vector3(prev.x, 0.06, prev.z)
-			pts.append(Vector3(prev.x, maxf(prev.y, 0.06), prev.z))
-			return {"points": pts, "cell": landing, "landing_pos": landing_pos}
+		if game_manager.is_floor(cell[0], cell[1]) and p.y > 0.06:
+			last_floor     = cell
+			last_floor_pos = Vector3(p.x, 0.06, p.z)
 		if p.y <= 0.06:
 			p.y = 0.06
 			pts.append(p)
-			landing     = cell
-			landing_pos = p
+			if game_manager.is_floor(cell[0], cell[1]):
+				landing     = cell
+				landing_pos = p
+			else:
+				landing     = last_floor
+				landing_pos = last_floor_pos
 			return {"points": pts, "cell": landing, "landing_pos": landing_pos}
 		pts.append(p)
 	landing = game_manager.world_to_grid(p)
 	if not game_manager.is_floor(landing[0], landing[1]):
-		landing = current_grid_pos
-	landing_pos = Vector3(p.x, 0.06, p.z)
+		landing     = last_floor
+		landing_pos = last_floor_pos
+	else:
+		landing_pos = Vector3(p.x, 0.06, p.z)
 	return {"points": pts, "cell": landing, "landing_pos": landing_pos}
 
 # ── Auto pick-up ─────────────────────────────────────────────────────────────
