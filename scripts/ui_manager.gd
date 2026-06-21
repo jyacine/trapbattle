@@ -852,15 +852,6 @@ func _build_mobile_buttons() -> void:
 	_trap_nd.offset_top    = -(JZ * 0.5 + MG + TSZ); _trap_nd.offset_bottom = -(JZ * 0.5 + MG)
 	add_child(_trap_nd)
 
-	# SWITCH GUN button — above trap button, same right column
-	const SGZ := 56.0
-	_switch_gun_nd = _action_image_button(SGZ, "res://assets/icons/icon_gun.svg")
-	_switch_gun_nd.anchor_left   = 1.0; _switch_gun_nd.anchor_right  = 1.0
-	_switch_gun_nd.anchor_top    = ACT_ANCHOR; _switch_gun_nd.anchor_bottom = ACT_ANCHOR
-	_switch_gun_nd.offset_left   = -(SGZ + MG); _switch_gun_nd.offset_right  = -MG
-	_switch_gun_nd.offset_top    = -(JZ * 0.5 + MG + TSZ + MG + SGZ)
-	_switch_gun_nd.offset_bottom = -(JZ * 0.5 + MG + TSZ + MG)
-	add_child(_switch_gun_nd)
 
 # Mic mute/unmute toggle. Built for every multiplayer client (desktop + mobile
 # web), not just touch — on desktop you can also press V. Placed on the mid-left
@@ -1082,12 +1073,6 @@ func _update_inventory_bar() -> void:
 			_active_trap_dot.visible = false
 			_active_label.visible = false
 
-	# Keep switch-gun touch button icon in sync with equipped gun
-	if _switch_gun_nd != null:
-		var tr = _switch_gun_nd.get_child(0) as TextureRect
-		if tr:
-			var icon_path: String = GUN_ICONS[player.gun_type] if player.gun_type >= 0 else "res://assets/icons/icon_gun.svg"
-			tr.texture = load(icon_path)
 
 func _circle_panel(size: float, fill: Color, border: Color, bw: int) -> Panel:
 	var p = Panel.new()
@@ -1221,12 +1206,6 @@ func _input(event: InputEvent) -> void:
 					player._begin_trap_aim()   # show arc; drag to aim, release to throw
 					get_viewport().set_input_as_handled()
 					return
-				if _switch_gun_nd != null and _switch_gun_nd.get_global_rect().has_point(pos) and _switch_gun_id == -1:
-					_switch_gun_id = event.index
-					_switch_gun_nd.modulate = Color(1.5, 1.5, 1.5)
-					_open_wheel()
-					get_viewport().set_input_as_handled()
-					return
 				if _jump_nd != null and _jump_nd.get_global_rect().has_point(pos) and _jump_id == -1:
 					_jump_id = event.index
 					_jump_nd.modulate = Color(1.5, 1.5, 1.5)
@@ -1256,10 +1235,6 @@ func _input(event: InputEvent) -> void:
 				_trap_id = -1
 				if _trap_nd: _trap_nd.modulate = Color(1, 1, 1)
 				player._release_trap_aim()   # throws at the aimed cell
-				get_viewport().set_input_as_handled()
-			elif event.index == _switch_gun_id:
-				_switch_gun_id = -1
-				if _switch_gun_nd: _switch_gun_nd.modulate = Color(1, 1, 1)
 				get_viewport().set_input_as_handled()
 			elif event.index == _jump_id:
 				_jump_id = -1
