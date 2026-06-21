@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <!-- arrow pointing up -->
+  <polygon points="50,8 20,48 36,48 36,76 64,76 64,48 80,48" fill="white" opacity="0.90"/>
+  <!-- ground line -->
+  <rect x="15" y="84" width="70" height="7" rx="3" fill="white" opacity="0.60"/>
+</svg>

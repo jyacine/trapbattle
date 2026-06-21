@@ -31,7 +31,7 @@ var ping_ms: int = 0
 var _ping_timer: float = 0.5   # send first ping quickly, then every 1 s
 
 # Late-join support — host tracks whether game is live
-var _game_started: bool = false
+var game_started: bool = false   # public: read by LobbyUI to skip lobby on late join
 var _game_seed:    int  = 0
 var _game_map:     int  = 1   # map id chosen for the current match (synced to all)
 
@@ -55,7 +55,7 @@ func host_game() -> void:
 
 func _on_host_peer_connected(id: int) -> void:
 	_peers.append(id)
-	if _game_started:
+	if game_started:
 		# Game already running — skip lobby handshake entirely.
 		# Slot assignment + late-join RPC are sent in _rpc_join_info once the
 		# peer sends their name/color.
@@ -102,7 +102,7 @@ func _do_start(map_id: int) -> void:
 	assignments.clear()
 	for i in _peers.size():
 		assignments[_peers[i]] = i
-	_game_started = true
+	game_started = true
 	_game_seed    = s
 	_game_map     = map_id
 	_rpc_start_game.rpc(s, assignments, map_id)
@@ -130,7 +130,7 @@ func _rpc_join_info(name: String, color_idx: int) -> void:
 	player_names[sender]         = name
 	player_color_indices[sender] = color_idx
 
-	if _game_started:
+	if game_started:
 		# Give the late joiner the next free player-index slot
 		var max_idx = -1
 		for idx in assignments.values():

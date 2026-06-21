@@ -87,9 +87,11 @@ var _look_prev_fire:   Vector2 = Vector2.ZERO   # track fire-drag position for t
 var _fire_nd:       Panel = null
 var _trap_nd:       Panel = null
 var _switch_gun_nd: Panel = null
+var _jump_nd:       Panel = null
 var _fire_id:       int   = -1
 var _trap_id:       int   = -1
 var _switch_gun_id: int   = -1
+var _jump_id:       int   = -1
 
 # ── Crosshair ─────────────────────────────────────────────────────────────────
 var _crosshair_parts: Array = []
@@ -849,6 +851,16 @@ func _build_mobile_buttons() -> void:
 	_switch_gun_nd.offset_bottom = -(FSZ * 0.5 + MG + TSZ + MG)
 	add_child(_switch_gun_nd)
 
+	# JUMP button — above switch-gun, right column, smaller
+	const JZ := 44.0
+	_jump_nd = _action_image_button(JZ, "res://assets/icons/icon_jump.svg")
+	_jump_nd.anchor_left   = 1.0; _jump_nd.anchor_right  = 1.0
+	_jump_nd.anchor_top    = ACT_ANCHOR; _jump_nd.anchor_bottom = ACT_ANCHOR
+	_jump_nd.offset_left   = -(JZ + MG); _jump_nd.offset_right  = -MG
+	_jump_nd.offset_top    = -(FSZ * 0.5 + MG + TSZ + MG + SGZ + MG + JZ)
+	_jump_nd.offset_bottom = -(FSZ * 0.5 + MG + TSZ + MG + SGZ + MG)
+	add_child(_jump_nd)
+
 # Mic mute/unmute toggle. Built for every multiplayer client (desktop + mobile
 # web), not just touch — on desktop you can also press V. Placed on the mid-left
 # edge so it never overlaps the top-right scoreboard or the bottom-right action
@@ -1213,6 +1225,12 @@ func _input(event: InputEvent) -> void:
 					_open_wheel()
 					get_viewport().set_input_as_handled()
 					return
+				if _jump_nd != null and _jump_nd.get_global_rect().has_point(pos) and _jump_id == -1:
+					_jump_id = event.index
+					_jump_nd.modulate = Color(1.5, 1.5, 1.5)
+					player.do_jump()
+					get_viewport().set_input_as_handled()
+					return
 				if _look_id == -1:
 					_look_id   = event.index
 					_look_prev = pos
@@ -1239,6 +1257,10 @@ func _input(event: InputEvent) -> void:
 			elif event.index == _switch_gun_id:
 				_switch_gun_id = -1
 				if _switch_gun_nd: _switch_gun_nd.modulate = Color(1, 1, 1)
+				get_viewport().set_input_as_handled()
+			elif event.index == _jump_id:
+				_jump_id = -1
+				if _jump_nd: _jump_nd.modulate = Color(1, 1, 1)
 				get_viewport().set_input_as_handled()
 
 	elif event is InputEventScreenDrag:
