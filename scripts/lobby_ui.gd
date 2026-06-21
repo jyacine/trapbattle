@@ -305,6 +305,15 @@ func _build_lobby_overlay() -> void:
 	_ping_label.visible = not _net.is_captain and multiplayer.has_multiplayer_peer()
 	add_child(_ping_label)
 
+	# EXIT / LEAVE button — bottom-left, always visible
+	var exit_btn = _mk_btn("Leave", Color(0.55, 0.08, 0.08))
+	exit_btn.anchor_left   = 0.0;  exit_btn.anchor_right  = 0.0
+	exit_btn.anchor_top    = 1.0;  exit_btn.anchor_bottom = 1.0
+	exit_btn.offset_left   = 16;   exit_btn.offset_right  = 160
+	exit_btn.offset_top    = -78;  exit_btn.offset_bottom = -18
+	exit_btn.pressed.connect(func(): get_tree().reload_current_scene())
+	add_child(exit_btn)
+
 	# START GAME button (captain only, bottom-centre)
 	_start_btn = _mk_btn("â–¶  START GAME", Color(0.0, 0.55, 0.10))
 	_start_btn.anchor_left   = 0.5;  _start_btn.anchor_right  = 0.5
@@ -425,9 +434,11 @@ func _on_join() -> void:
 	_net.join_game(ip)
 
 func _on_connected() -> void:
-	_enter_lobby_room()
-	if _countdown_label:
-		_countdown_label.text = "Connected â€” waiting for hostâ€¦"
+	# Defer building the 3-D lobby room by ~400 ms.  When a player joins a
+	# game that is already in progress the server sends _rpc_late_join within
+	# that window, lobby_ready fires, and queue_free() runs — so the lobby room
+	# is never built and the player goes straight into the game.
+	get_tree().create_timer(0.40).timeout.connect(_enter_lobby_room_deferred)
 
 # â”€â”€ Lobby update from NetworkManager â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 func _on_lobby_updated(peer_ids: Array) -> void:
@@ -487,6 +498,14 @@ func _on_start_pressed() -> void:
 		_start_btn.disabled = true
 	_counting = false
 	_net.request_start()
+
+func _enter_lobby_room_deferred() -> void:
+	# Only build the room if lobby_ready hasn't already fired (we'd be freed by now).
+	if not is_instance_valid(self): return
+	if _lobby_room != null: return
+	_enter_lobby_room()
+	if _countdown_label:
+		_countdown_label.text = "Connected â€" waiting for hostâ€¦"
 
 func _on_lobby_ready(seed_val: int) -> void:
 	if _lobby_room and is_instance_valid(_lobby_room):

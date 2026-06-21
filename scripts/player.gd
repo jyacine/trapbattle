@@ -57,6 +57,8 @@ const THROW_SPEED     := 11.0   # initial throw velocity (m/s) along the aim ray
 const THROW_GRAVITY   := 17.0   # arc gravity (game-y, snappier than 9.8)
 const THROW_DT        := 0.03   # arc integration step (s)
 const THROW_MAX_STEPS := 70     # ~2.1 s max flight before giving up
+const THROW_WALL_H    := 3.0    # wall height — arc can pass over walls above this Y
+var _traj_target_pos: Vector3   = Vector3.ZERO   # exact arc-landing world position
 
 # ── Gun system (2 slots) ─────────────────────────────────────────────────────
 var _gun_cooldown: float = 0.0
@@ -131,14 +133,22 @@ var is_local: bool = true
 var _is_touch: bool = false
 
 # Remote-body HP bar (only built when is_local == false)
-var _hp3_fill_mi: MeshInstance3D = null
-var _hp3_fill_q:  QuadMesh       = null
-var _hp3_label:   Label3D        = null
+var _hp3_fill_mi:      MeshInstance3D = null
+var _hp3_fill_q:       QuadMesh       = null
+var _hp3_label:        Label3D        = null
+var _remote_body_root: Node3D         = null   # parent of CSG body parts — hidden when dead
+var _remote_gun_mi:    MeshInstance3D = null   # gun mesh shown when opponent is armed
+var _last_synced_gun_type: int        = -2     # -2 = never synced (sentinel)
 
 # ── Viewmodel (first-person gun) ─────────────────────────────────────────────
 var _viewmodel_root: Node3D = null
 var _vm_sway_time:   float  = 0.0
 var _vm_recoil:      float  = 0.0
+
+# ── Jump ─────────────────────────────────────────────────────────────────────
+var _jump_vel: float = 0.0
+const JUMP_SPEED   := 5.5
+const JUMP_GRAVITY := 14.0
 
 # ── Debug overlay (toggle with F3; on by default so it shows on mobile) ────────
 var _dbg_label:       Label = null
@@ -406,8 +416,18 @@ func _physics_process(delta: float) -> void:
 		else:
 			_update_trap_aim()
 
+	# Jump arc: manual Y velocity separate from move_and_slide() horizontal movement.
+	if _jump_vel != 0.0 or position.y > 0.01:
+		_jump_vel -= JUMP_GRAVITY * delta
+		position.y = maxf(0.0, position.y + _jump_vel * delta)
+		if position.y <= 0.0:
+			_jump_vel = 0.0
+
 	if multiplayer.has_multiplayer_peer():
 		_net_pos.rpc(position, yaw)
+		if gun_type != _last_synced_gun_type:
+			_last_synced_gun_type = gun_type
+			_net_gun_type.rpc(gun_type)
 
 # Pure look-smoothing math (static so it can be unit-tested headless without a
 # full Player node — see tests/test_look_smoothing.gd). Returns how much to add
@@ -465,18 +485,16 @@ func _input(event: InputEvent) -> void:
 			pitch = clamp(pitch, -PI / 3.0, PI / 3.0)
 			camera_node.rotation.x = pitch
 
-	# KEY_SPACE is mapped to ui_accept in Godot's default InputMap, which means
-	# InputEventKey for SPACE may be consumed by the GUI layer before we see it.
-	# Catching it via action avoids the conflict.
+	# Space = jump. Use is_action so it works regardless of OS key repeat settings.
 	if event.is_action_pressed("ui_accept") and not event.is_echo():
-		_cycle_trap_slot()
+		do_jump()
 		get_viewport().set_input_as_handled()
 		return
 
 	if event is InputEventKey and event.pressed and not event.echo:
 		match event.keycode:
 			KEY_N:      _try_place()
-			KEY_C:      _cycle_trap_slot()    # cycle trap (also: SPACE)
+			KEY_C:      _cycle_trap_slot()    # cycle trap
 			KEY_V:      _cycle_gun_slot()     # cycle gun  (also: B)
 			KEY_TAB:    _fire_gun()
 			KEY_B:      _cycle_gun_slot()     # kept for backward compat
@@ -506,6 +524,11 @@ func _cycle_trap_slot() -> void:
 func _cycle_gun_slot() -> void:
 	active_gun_slot = (active_gun_slot + 1) % 3
 	_rebuild_viewmodel()
+
+func do_jump() -> void:
+	if not is_local or not game_manager.is_playing: return
+	if _jump_vel == 0.0 and position.y <= 0.05:
+		_jump_vel = JUMP_SPEED
 
 # ── Gun ───────────────────────────────────────────────────────────────────────
 func _fire_gun() -> void:
@@ -622,6 +645,7 @@ func _ensure_traj_nodes() -> void:
 		lm.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 		lm.vertex_color_use_as_albedo = true
 		lm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		lm.no_depth_test = true
 		_traj_line.material_override = lm
 		get_parent().add_child(_traj_line)
 	if _traj_marker == null:
@@ -649,6 +673,7 @@ func _update_trap_aim() -> void:
 	var arc := _compute_throw_arc()
 	var pts: PackedVector3Array = arc["points"]
 	_traj_target_cell = arc["cell"]
+	_traj_target_pos  = arc.get("landing_pos", game_manager.grid_to_world(_traj_target_cell))
 	var col: Color = Config.TRAP_COLORS.get(held_trap, Color(1.0, 0.9, 0.2))
 
 	_traj_im.clear_surfaces()
@@ -656,18 +681,17 @@ func _update_trap_aim() -> void:
 		_traj_im.surface_begin(Mesh.PRIMITIVE_LINE_STRIP)
 		for i in pts.size():
 			var fade := 1.0 - float(i) / float(pts.size())
-			_traj_im.surface_set_color(Color(col.r, col.g, col.b, 0.30 + 0.70 * fade))
+			_traj_im.surface_set_color(Color(col.r, col.g, col.b, 0.40 + 0.60 * fade))
 			_traj_im.surface_add_vertex(pts[i])
 		_traj_im.surface_end()
 
-	var wpos := game_manager.grid_to_world(_traj_target_cell)
-	_traj_marker.position = Vector3(wpos.x, 0.06, wpos.z)
+	_traj_marker.position = Vector3(_traj_target_pos.x, 0.06, _traj_target_pos.z)
 	var mat := _traj_marker.material_override as StandardMaterial3D
 	if mat: mat.albedo_color = Color(col.r, col.g, col.b, 0.85)
 
-# Integrate a simple ballistic arc from the eye along the aim ray. Full-height
-# maze walls block the throw at any height, so the grid floor test doubles as the
-# wall test. Returns {points: PackedVector3Array, cell: [col,row] landing cell}.
+# Integrate a simple ballistic arc from the eye along the aim ray.
+# The arc can pass OVER walls when its Y exceeds THROW_WALL_H (wall top height).
+# Returns {points, cell: landing grid cell, landing_pos: exact world Vector3}.
 func _compute_throw_arc() -> Dictionary:
 	var origin: Vector3 = camera_node.global_position
 	var fwd: Vector3 = -camera_node.global_transform.basis.z
@@ -675,6 +699,7 @@ func _compute_throw_arc() -> Dictionary:
 	var pts := PackedVector3Array()
 	pts.append(origin)
 	var landing: Array = current_grid_pos
+	var landing_pos := origin
 	var p := origin
 	var t := 0.0
 	for i in THROW_MAX_STEPS:
@@ -682,22 +707,27 @@ func _compute_throw_arc() -> Dictionary:
 		t += THROW_DT
 		p = origin + v0 * t + Vector3(0.0, -0.5 * THROW_GRAVITY * t * t, 0.0)
 		var cell := game_manager.world_to_grid(p)
-		if not game_manager.is_floor(cell[0], cell[1]):
-			# Hit a wall column — land on the last open cell the arc passed through.
+		# Only treat a wall cell as a blocker when the arc is below wall height.
+		if not game_manager.is_floor(cell[0], cell[1]) and p.y < THROW_WALL_H:
+			# Arc hits a wall at ground level — stop at last valid point.
 			var pc := game_manager.world_to_grid(prev)
 			if game_manager.is_floor(pc[0], pc[1]):
-				landing = pc
+				landing     = pc
+				landing_pos = Vector3(prev.x, 0.06, prev.z)
 			pts.append(Vector3(prev.x, maxf(prev.y, 0.06), prev.z))
-			return {"points": pts, "cell": landing}
+			return {"points": pts, "cell": landing, "landing_pos": landing_pos}
 		if p.y <= 0.06:
 			p.y = 0.06
 			pts.append(p)
-			return {"points": pts, "cell": cell}
+			landing     = cell
+			landing_pos = p
+			return {"points": pts, "cell": landing, "landing_pos": landing_pos}
 		pts.append(p)
 	landing = game_manager.world_to_grid(p)
 	if not game_manager.is_floor(landing[0], landing[1]):
 		landing = current_grid_pos
-	return {"points": pts, "cell": landing}
+	landing_pos = Vector3(p.x, 0.06, p.z)
+	return {"points": pts, "cell": landing, "landing_pos": landing_pos}
 
 # ── Auto pick-up ─────────────────────────────────────────────────────────────
 func _try_pickup() -> void:
@@ -752,8 +782,19 @@ func _net_pos(pos: Vector3, y: float) -> void:
 	rotation.y       = yaw
 	current_grid_pos = game_manager.world_to_grid(pos)   # keep grid pos in sync
 
+# Syncs which gun type (if any) the local player is currently holding.
+# Received by all remote peers so they can show/hide the gun on the remote body.
+@rpc("authority", "unreliable")
+func _net_gun_type(gtype: int) -> void:
+	if is_multiplayer_authority(): return
+	if _remote_gun_mi:
+		_remote_gun_mi.visible = (gtype >= 0)
+
 # ── Remote body ───────────────────────────────────────────────────────────────
 func _build_remote_body() -> void:
+	_remote_body_root = Node3D.new()
+	add_child(_remote_body_root)
+
 	var pc  = Config.PLAYER_COLORS[player_index % Config.PLAYER_COLORS.size()]
 	var bm  = StandardMaterial3D.new()
 	bm.albedo_color = pc.darkened(0.35); bm.metallic = 0.8; bm.roughness = 0.3
@@ -774,11 +815,23 @@ func _build_remote_body() -> void:
 	for p in parts:
 		var box = CSGBox3D.new()
 		box.size = p[0]; box.position = p[1]; box.material = p[2]
-		add_child(box)
+		_remote_body_root.add_child(box)
+
+	# Gun held in right hand — hidden until opponent picks one up.
+	var gm = StandardMaterial3D.new()
+	gm.albedo_color = Color(0.12, 0.12, 0.12); gm.metallic = 0.9; gm.roughness = 0.2
+	_remote_gun_mi = MeshInstance3D.new()
+	var gun_box := BoxMesh.new(); gun_box.size = Vector3(0.06, 0.06, 0.30)
+	_remote_gun_mi.mesh = gun_box
+	_remote_gun_mi.set_surface_override_material(0, gm)
+	_remote_gun_mi.position  = Vector3(0.30, 0.72, 0.22)
+	_remote_gun_mi.visible   = false
+	_remote_body_root.add_child(_remote_gun_mi)
 
 	var eye = OmniLight3D.new()
 	eye.position = Vector3(0, 1.4, 0); eye.light_color = pc
-	eye.light_energy = 1.5; eye.omni_range = 3.0; add_child(eye)
+	eye.light_energy = 1.5; eye.omni_range = 3.0
+	_remote_body_root.add_child(eye)
 
 	_build_hp3_bar()
 
@@ -814,6 +867,9 @@ func _build_hp3_bar() -> void:
 
 func _update_hp3_bar() -> void:
 	if _hp3_fill_mi == null: return
+	var is_dead: bool = game_manager.respawning.get(peer_id, false)
+	if _remote_body_root:
+		_remote_body_root.visible = not is_dead
 	var h     = game_manager.hp.get(peer_id, Config.MAX_HP)
 	var ratio = float(h) / float(Config.MAX_HP)
 	var fw    = 0.66

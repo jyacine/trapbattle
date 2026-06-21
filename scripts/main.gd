@@ -364,6 +364,17 @@ func _props_canyon(wall_cells: Array, dead_ends: Array, cs: float, wall_h: float
 		rocks.append(Transform3D(Basis(), Vector3((cell.x + 0.5) * cs, 0.3, (cell.y + 0.5) * cs)))
 	_add_multimesh(rock_mesh, _solid_mat(Color(0.50, 0.42, 0.34), 1.0), rocks, maze_node)
 
+# Attach a StaticBody3D + BoxShape3D to a prop node so players can't walk through it.
+func _add_prop_collision(prop: Node3D, shape_size: Vector3, shape_offset: Vector3) -> void:
+	var sb := StaticBody3D.new()
+	var cs3 := CollisionShape3D.new()
+	var box := BoxShape3D.new()
+	box.size = shape_size
+	cs3.shape = box
+	cs3.position = shape_offset
+	sb.add_child(cs3)
+	prop.add_child(sb)
+
 # Village Real: scatter megakit glTF props (crates, vines, wagon, fences).
 # Falls back to procedural _props_village() until the Godot editor imports the models.
 func _props_village_real(wall_cells: Array, dead_ends: Array, grid: Array, rows: int, cols: int, cs: float, wall_h: float, maze_node: Node3D) -> void:
@@ -391,6 +402,7 @@ func _props_village_real(wall_cells: Array, dead_ends: Array, grid: Array, rows:
 		inst.rotation.y = float(i % 8) * PI * 0.25
 		inst.scale = Vector3.ONE * 0.85
 		maze_node.add_child(inst)
+		_add_prop_collision(inst, Vector3(0.75, 0.75, 0.75), Vector3(0, 0.375, 0))
 		crate_count += 1
 
 	# Vines leaning on wall bases (max 15, sparse).
@@ -418,9 +430,11 @@ func _props_village_real(wall_cells: Array, dead_ends: Array, grid: Array, rows:
 				inst.position = Vector3((tc + 0.5) * cs, 0.0, (cr + 0.5) * cs)
 				inst.scale = Vector3.ONE * 0.75
 				maze_node.add_child(inst)
+				_add_prop_collision(inst, Vector3(1.8, 1.0, 0.9), Vector3(0, 0.5, 0))
 				break
 
-	# Fences along floor cells adjacent to walls (max 14, sparse).
+	# Fences along floor cells adjacent to walls — skip hallway cells so the
+	# fence never blocks a corridor (hallway = ≤2 open cardinal neighbours).
 	if fence_scene != null:
 		var fence_count := 0
 		for r in range(1, rows - 1):
@@ -429,6 +443,13 @@ func _props_village_real(wall_cells: Array, dead_ends: Array, grid: Array, rows:
 				if fence_count >= 14: break
 				if grid[r][c] != 0: continue
 				if (r + c) % 7 != 0: continue
+				# Count open cardinal neighbours.
+				var open := 0
+				for d: Array in [[0, 1], [0, -1], [1, 0], [-1, 0]]:
+					var nr: int = r + d[0]; var nc: int = c + d[1]
+					if nr >= 0 and nr < rows and nc >= 0 and nc < cols:
+						if grid[nr][nc] == 0: open += 1
+				if open <= 2: continue   # hallway or dead-end — skip
 				var adj := false
 				for dr in [-1, 0, 1]:
 					if adj: break
@@ -441,6 +462,8 @@ func _props_village_real(wall_cells: Array, dead_ends: Array, grid: Array, rows:
 				inst.rotation.y = float((r + c) % 4) * PI * 0.5
 				inst.scale = Vector3.ONE * 0.9
 				maze_node.add_child(inst)
+				# Thin collision box along the fence length.
+				_add_prop_collision(inst, Vector3(cs * 0.9, 1.2, 0.12), Vector3.ZERO)
 				fence_count += 1
 
 # ── Map materials ─────────────────────────────────────────────────────────────
