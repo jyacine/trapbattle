@@ -34,8 +34,11 @@ const MIC_BUS         := "VoiceMic"
 # loss, but that path already has higher latency so the trade-off is acceptable.
 const GEN_BUFFER_LEN := 0.12    # AudioStreamGenerator internal buffer (s)  was 0.25
 const JITTER_TARGET  := 0.03    # keep ~30 ms buffered in the generator       was 0.10
-const JITTER_PREBUF  := 0.02    # accumulate 20 ms before (re)starting playout was 0.08
+const JITTER_PREBUF  := 0.06    # accumulate 60 ms before (re)starting playout was 0.08
 const JITTER_MAX     := 0.15    # cap queued audio at 150 ms                   was 0.25
+# Silence padding on underrun: instead of going silent while waiting for JITTER_PREBUF,
+# push zeros so the generator keeps running and the restart is inaudible.
+const JITTER_SILENCE_PAD := 0.06  # seconds of zeros to push on each underrun restart
 
 # ── WebRTC DataChannel transport (UDP — off the TCP/WebSocket plane) ──────────
 # When enabled, voice flows over an UNRELIABLE/UNORDERED WebRTC DataChannel to the
@@ -94,11 +97,16 @@ var _enc_index:     int = 0
 # plays the audio at 2× speed (the "minion voice" effect).
 # We skip the first few calls (startup buffer drain) then measure the next
 # _RATE_CAL_CALLS packets to get the true steady-state frame arrival rate.
+# IMPORTANT: divide by ACTUAL elapsed wall-clock time, NOT by calls×SEND_INTERVAL.
+# The browser game loop runs at its own fps (often 30 fps = 33 ms/frame), so the
+# timer fires every 33 ms instead of 20 ms. Using nominal SEND_INTERVAL inflated
+# the measured rate to 79 kHz / 61 kHz and caused 1.6× pitch-up at the receiver.
 const _RATE_CAL_SKIP  := 5            # discard first 5 calls (startup backlog)
-const _RATE_CAL_CALLS := 20           # then measure 20 × 0.02 s = 0.4 s
+const _RATE_CAL_CALLS := 20           # then measure over ~0.4–0.7 s of real time
 var _rate_cal_skipped: int = 0
 var _rate_cal_frames:  int = 0
 var _rate_cal_done:    int = 0
+var _rate_cal_t0:      int = -1       # wall-clock ms at start of measurement window
 
 # Streaming resampler state. The mic is read in ~20 ms chunks; resampling each
 # chunk independently (the old code) dropped a fractional sample and reset the
@@ -269,14 +277,17 @@ func _capture_and_send() -> void:
 	if _rate_cal_skipped < _RATE_CAL_SKIP:
 		_rate_cal_skipped += 1
 	elif _rate_cal_done < _RATE_CAL_CALLS:
+		if _rate_cal_t0 < 0:
+			_rate_cal_t0 = Time.get_ticks_msec()   # start wall-clock at first real call
 		_rate_cal_frames += available
 		_rate_cal_done   += 1
 		if _rate_cal_done == _RATE_CAL_CALLS:
-			var measured := float(_rate_cal_frames) / (_RATE_CAL_CALLS * SEND_INTERVAL)
+			# Divide by ACTUAL elapsed time so the game-loop fps doesn't corrupt the result.
+			var elapsed_ms := float(Time.get_ticks_msec() - _rate_cal_t0)
+			var measured := float(_rate_cal_frames) / maxf(elapsed_ms * 0.001, 0.001)
 			if measured > 8000.0 and measured < 200000.0 and absf(measured - _capture_rate) > 2000.0:
-				push_warning("[voice] capture rate corrected %.0f → %.0f Hz (avg %.1f frames/20ms)" % [
-					_capture_rate, measured,
-					float(_rate_cal_frames) / float(_RATE_CAL_CALLS)])
+				push_warning("[voice] capture rate corrected %.0f → %.0f Hz (%.0f frames over %.0f ms)" % [
+					_capture_rate, measured, _rate_cal_frames, elapsed_ms])
 				_capture_rate = measured
 				_resample_reset()
 
@@ -591,11 +602,14 @@ func _send_diag() -> void:
 		var playing: bool = bool(_jq_play.get(pid, false))
 		jitter_info += " peer%d:q%dms(%s)" % [pid, queued_ms, "play" if playing else "prebuf"]
 
-	var payload := "peer=%d path=%s ch=%s cap=%.0fHz tx_rtc=%d tx_ws=%d underruns=%d jitter=[%s]" % [
+	var cal_state := "pending" if _rate_cal_done < _RATE_CAL_CALLS else "done"
+	var payload := "peer=%d path=%s ch=%s mix=%.0fHz cap=%.0fHz(%s) tx_rtc=%d tx_ws=%d underruns=%d jitter=[%s]" % [
 		multiplayer.get_unique_id(),
 		"UDP/DataChannel" if _rtc_open else "WebSocket",
 		ch_state,
+		AudioServer.get_mix_rate(),
 		_capture_rate,
+		cal_state,
 		_diag_tx_rtc, _diag_tx_ws, _diag_underrun,
 		jitter_info.strip_edges()
 	]
@@ -678,7 +692,14 @@ func _pump_speakers() -> void:
 		var n: int = min(deficit, queued)
 		if n <= 0:
 			if buffered <= 0:
-				_jq_play[pid] = false   # fully drained → re-prebuffer
+				# Generator drained: push a short silence pad so the audio stream keeps
+				# running smoothly (no click), then enter prebuf mode. The listener hears
+				# soft silence during the pad rather than an abrupt stop.
+				var pad := int(JITTER_SILENCE_PAD * rate)
+				var silence := PackedVector2Array()
+				silence.resize(pad)
+				pb.push_buffer(silence)
+				_jq_play[pid] = false   # re-prebuffer after the silence plays out
 				_diag_underrun += 1
 			continue
 		pb.push_buffer(q.slice(pos, pos + n))
