@@ -227,6 +227,7 @@ func _scatter_props(map_id: int, grid: Array, rows: int, cols: int, cs: float, w
 		3: _props_forest(wall_cells, dead_ends, cs, wall_h, maze_node)
 		4: _props_village(wall_cells, dead_ends, cs, wall_h, maze_node)
 		5: _props_canyon(wall_cells, dead_ends, cs, wall_h, maze_node)
+		6: _props_village_real(wall_cells, dead_ends, grid, rows, cols, cs, wall_h, maze_node)
 
 # Add one MultiMeshInstance3D batching `mesh` at every transform in `xforms`.
 func _add_multimesh(mesh: Mesh, mat: Material, xforms: Array, maze_node: Node3D) -> void:
@@ -363,8 +364,107 @@ func _props_canyon(wall_cells: Array, dead_ends: Array, cs: float, wall_h: float
 		rocks.append(Transform3D(Basis(), Vector3((cell.x + 0.5) * cs, 0.3, (cell.y + 0.5) * cs)))
 	_add_multimesh(rock_mesh, _solid_mat(Color(0.50, 0.42, 0.34), 1.0), rocks, maze_node)
 
+# Village Real: scatter megakit glTF props (crates, vines, wagon, fences).
+# Falls back to procedural _props_village() until the Godot editor imports the models.
+func _props_village_real(wall_cells: Array, dead_ends: Array, grid: Array, rows: int, cols: int, cs: float, wall_h: float, maze_node: Node3D) -> void:
+	var crate_scene  := load("res://assets/medieval_village_megakit/models/Prop_Crate.gltf") as PackedScene
+	var vine1_scene  := load("res://assets/medieval_village_megakit/models/Prop_Vine1.gltf") as PackedScene
+	var vine2_scene  := load("res://assets/medieval_village_megakit/models/Prop_Vine2.gltf") as PackedScene
+	var wagon_scene  := load("res://assets/medieval_village_megakit/models/Prop_Wagon.gltf") as PackedScene
+	var fence_scene  := load("res://assets/medieval_village_megakit/models/Prop_WoodenFence_Single.gltf") as PackedScene
+
+	if crate_scene == null and vine1_scene == null:
+		# Models not yet imported by the Godot editor — use procedural fallback.
+		push_warning("Megakit models not imported; falling back to procedural village props.")
+		_props_village(wall_cells, dead_ends, cs, wall_h, maze_node)
+		return
+
+	# Crates in dead-ends (max 20).
+	var crate_count := 0
+	for i in range(dead_ends.size()):
+		if crate_count >= 20: break
+		if i % 2 != 0: continue
+		if crate_scene == null: break
+		var cell: Vector2i = dead_ends[i]
+		var inst := crate_scene.instantiate() as Node3D
+		inst.position = Vector3((cell.x + 0.5) * cs, 0.0, (cell.y + 0.5) * cs)
+		inst.rotation.y = float(i % 8) * PI * 0.25
+		inst.scale = Vector3.ONE * 0.85
+		maze_node.add_child(inst)
+		crate_count += 1
+
+	# Vines leaning on wall bases (max 15, sparse).
+	var vine_count := 0
+	for i in range(wall_cells.size()):
+		if vine_count >= 15: break
+		if i % 9 != 0: continue
+		var scene := vine1_scene if (i % 2 == 0) else vine2_scene
+		if scene == null: continue
+		var cell: Vector2i = wall_cells[i]
+		var inst := scene.instantiate() as Node3D
+		inst.position = Vector3((cell.x + 0.5) * cs, 0.0, (cell.y + 0.5) * cs)
+		inst.rotation.y = float(i % 4) * PI * 0.5
+		inst.scale = Vector3.ONE * 0.8
+		maze_node.add_child(inst)
+		vine_count += 1
+
+	# One wagon near the central plaza.
+	if wagon_scene != null:
+		var cc := cols / 2; var cr := rows / 2
+		for dc in [2, -2, 3, -3, 1, -1]:
+			var tc := cc + dc
+			if tc >= 0 and tc < cols and grid[cr][tc] == 0:
+				var inst := wagon_scene.instantiate() as Node3D
+				inst.position = Vector3((tc + 0.5) * cs, 0.0, (cr + 0.5) * cs)
+				inst.scale = Vector3.ONE * 0.75
+				maze_node.add_child(inst)
+				break
+
+	# Fences along floor cells adjacent to walls (max 14, sparse).
+	if fence_scene != null:
+		var fence_count := 0
+		for r in range(1, rows - 1):
+			if fence_count >= 14: break
+			for c in range(1, cols - 1):
+				if fence_count >= 14: break
+				if grid[r][c] != 0: continue
+				if (r + c) % 7 != 0: continue
+				var adj := false
+				for dr in [-1, 0, 1]:
+					if adj: break
+					for dc in [-1, 0, 1]:
+						if dr == 0 and dc == 0: continue
+						if grid[r + dr][c + dc] == 1: adj = true; break
+				if not adj: continue
+				var inst := fence_scene.instantiate() as Node3D
+				inst.position = Vector3((c + 0.5) * cs, 0.0, (r + 0.5) * cs)
+				inst.rotation.y = float((r + c) % 4) * PI * 0.5
+				inst.scale = Vector3.ONE * 0.9
+				maze_node.add_child(inst)
+				fence_count += 1
+
 # ── Map materials ─────────────────────────────────────────────────────────────
 func _make_wall_material(map_id: int) -> Material:
+	if map_id == 6:
+		# Village Real — UnevenBrick texture from megakit (requires editor import).
+		# Falls back to a plain stone colour if not yet imported.
+		var m := StandardMaterial3D.new()
+		var tex := load("res://assets/medieval_village_megakit/textures/T_UnevenBrick_BaseColor.png") as Texture2D
+		if tex:
+			m.albedo_texture = tex
+			m.uv1_scale = Vector3(2.5, 1.5, 1.0)
+		else:
+			m.albedo_color = Color(0.30, 0.26, 0.21)
+		var norm := load("res://assets/medieval_village_megakit/textures/T_UnevenBrick_Normal.png") as Texture2D
+		if norm:
+			m.normal_enabled = true; m.normal_texture = norm; m.normal_scale = 1.2
+		var rough := load("res://assets/medieval_village_megakit/textures/T_UnevenBrick_Roughness.png") as Texture2D
+		if rough:
+			m.roughness_texture = rough
+			m.roughness_texture_channel = BaseMaterial3D.TEXTURE_CHANNEL_RED
+		m.roughness = 0.90
+		return m
+
 	var shader = Shader.new()
 	if map_id == 2:
 		# Garage — corrugated sheet metal with rusty streaks.
@@ -450,6 +550,25 @@ void fragment() {
 	var mat = ShaderMaterial.new(); mat.shader = shader; return mat
 
 func _make_floor_material(map_id: int) -> Material:
+	if map_id == 6:
+		# Village Real — cobblestone tiles from megakit (requires editor import).
+		var m := StandardMaterial3D.new()
+		var tex := load("res://assets/medieval_village_megakit/textures/T_Brick_BaseColor.png") as Texture2D
+		if tex:
+			m.albedo_texture = tex
+			m.uv1_scale = Vector3(5.0, 5.0, 1.0)
+		else:
+			m.albedo_color = Color(0.20, 0.17, 0.13)
+		var norm := load("res://assets/medieval_village_megakit/textures/T_Brick_Normal.png") as Texture2D
+		if norm:
+			m.normal_enabled = true; m.normal_texture = norm; m.normal_scale = 0.8
+		var rough := load("res://assets/medieval_village_megakit/textures/T_Brick_Roughness.png") as Texture2D
+		if rough:
+			m.roughness_texture = rough
+			m.roughness_texture_channel = BaseMaterial3D.TEXTURE_CHANNEL_RED
+		m.roughness = 0.92
+		return m
+
 	var shader = Shader.new()
 	if map_id == 2:
 		# Garage — poured concrete with oil stains.
@@ -536,8 +655,8 @@ func _make_ceiling_material(map_id: int) -> Material:
 		mat.albedo_color = Color(0.46, 0.66, 0.96); mat.roughness = 1.0
 		mat.emission_enabled = true; mat.emission = Color(0.50, 0.68, 0.98)
 		mat.emission_energy_multiplier = 0.9
-	elif map_id == 4:
-		# Village — overcast moonlit night, almost no light from above.
+	elif map_id == 4 or map_id == 6:
+		# Village / Village Real — overcast moonlit night, almost no light from above.
 		mat.albedo_color = Color(0.04, 0.05, 0.09); mat.roughness = 1.0
 		mat.emission_enabled = true; mat.emission = Color(0.10, 0.12, 0.22)
 		mat.emission_energy_multiplier = 0.28
@@ -567,7 +686,7 @@ func _create_lighting() -> void:
 			dir_light.light_color = Color(1.0, 0.97, 0.85); dir_light.light_energy = 0.9
 			env.ambient_light_color = Color(0.42, 0.52, 0.40); env.ambient_light_energy = 1.4
 			env.fog_enabled = true; env.fog_light_color = Color(0.55, 0.70, 0.55); env.fog_density = 0.015
-		4:  # Village — cold moonlight, very dark, heavy damp fog
+		4, 6:  # Village / Village Real — cold moonlight, very dark, heavy damp fog
 			dir_light.light_color = Color(0.62, 0.70, 0.92); dir_light.light_energy = 0.22
 			env.ambient_light_color = Color(0.07, 0.09, 0.15); env.ambient_light_energy = 0.65
 			env.fog_enabled = true; env.fog_light_color = Color(0.10, 0.12, 0.18); env.fog_density = 0.060
