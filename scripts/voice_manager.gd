@@ -27,15 +27,24 @@ const VAD_HANGOVER    := 0.35    # keep transmitting this long after speech dips
 const MIC_BUS         := "VoiceMic"
 
 # ── Jitter buffer (fixes choppy playback) ────────────────────────────────────
-# Voice rides the game's WebSocket (TCP) multiplayer channel, so packets arrive in
-# jittery bursts (TCP head-of-line blocking under loss). Pushing them straight into
-# the audio generator underran it between bursts → choppy. Instead we QUEUE incoming
-# audio per speaker and keep the generator topped up to a target depth, starting
-# playout only after a small prebuffer. This trades a little latency for smoothness.
-const GEN_BUFFER_LEN := 0.25    # AudioStreamGenerator internal buffer (s)
-const JITTER_TARGET  := 0.10    # keep ~this much buffered in the generator (jitter tolerance)
-const JITTER_PREBUF  := 0.08    # accumulate this much before (re)starting playout
-const JITTER_MAX     := 0.25    # cap queued audio; drop oldest beyond this (bounds latency)
+# Voice originally rode WebSocket (TCP). Now it travels over an unreliable UDP
+# DataChannel — packets arrive at a steady ~20 ms cadence with much less jitter
+# than TCP. Constants are tuned for UDP: smaller target/prebuf → lower latency.
+# If voice falls back to WebSocket the buffer may underrun more often under burst
+# loss, but that path already has higher latency so the trade-off is acceptable.
+const GEN_BUFFER_LEN := 0.12    # AudioStreamGenerator internal buffer (s)
+const JITTER_TARGET  := 0.06    # keep ~60 ms buffered in the generator
+# WHY 60 ms: pump runs once per game frame. At 25 fps (40 ms/frame) the generator
+# drains 24000×0.04=960 frames/frame. We must push that much back, so deficit must
+# be ≥ 960. deficit = target − buffered_after_drain = target − (target−960) = 960.
+# That only holds while target > drain/frame, i.e. target > VOICE_RATE/fps.
+# At 25 fps: 24000/25=960 frames=40 ms. At 17 fps: ~1400 frames=58 ms.
+# 60 ms (1440 frames) keeps the queue stable down to ~17 fps.
+const JITTER_PREBUF  := 0.03    # accumulate 30 ms before (re)starting playout
+const JITTER_MAX     := 0.15    # cap queued audio at 150 ms
+# Silence padding on underrun: push zeros so the generator keeps running (avoids
+# click) and the restart is inaudible; 30 ms matches the new JITTER_PREBUF.
+const JITTER_SILENCE_PAD := 0.03  # seconds of zeros to push on each underrun restart
 
 # ── WebRTC DataChannel transport (UDP — off the TCP/WebSocket plane) ──────────
 # When enabled, voice flows over an UNRELIABLE/UNORDERED WebRTC DataChannel to the
@@ -87,18 +96,21 @@ var _local_speaking: bool = false    # current VAD state for the local mic
 var _enc_predictor: int = 0
 var _enc_index:     int = 0
 
-# Capture-rate auto-calibration.
-# AudioServer.get_mix_rate() on iOS/web can diverge from what AudioEffectCapture
-# actually delivers (commonly returns 48000 while frames arrive at 24000 Hz),
-# causing step = 2 in the resampler → every other sample discarded → receiver
-# plays the audio at 2× speed (the "minion voice" effect).
-# We skip the first few calls (startup buffer drain) then measure the next
-# _RATE_CAL_CALLS packets to get the true steady-state frame arrival rate.
-const _RATE_CAL_SKIP  := 5            # discard first 5 calls (startup backlog)
-const _RATE_CAL_CALLS := 20           # then measure 20 × 0.02 s = 0.4 s
-var _rate_cal_skipped: int = 0
-var _rate_cal_frames:  int = 0
-var _rate_cal_done:    int = 0
+# Capture-rate: use AudioServer.get_mix_rate() — the authoritative browser audio rate.
+# We previously tried frame-count calibration but AudioEffectCapture.get_frames_available()
+# in the Godot Web export is unreliable: it returns 0 most ticks and delivers batches,
+# so any frame-counting approach produces wildly wrong values (15 kHz, 29 kHz, 79 kHz).
+# get_mix_rate() consistently returns the correct browser rate (48000 Hz in all observed
+# sessions). _capture_rate is set once in _setup_mic() and never changed.
+# Kept for diagnostic: we still observe frame counts to log what calibration would have
+# measured — helpful for spotting browsers that genuinely lie about get_mix_rate().
+const _RATE_CAL_SKIP  := 5
+const _RATE_CAL_CALLS := 20
+var _rate_cal_skipped:  int   = 0
+var _rate_cal_frames:   int   = 0
+var _rate_cal_done:     int   = 0
+var _rate_cal_t0:       int   = -1
+var _rate_cal_measured: float = -1.0   # stored once when calibration window closes
 
 # Streaming resampler state. The mic is read in ~20 ms chunks; resampling each
 # chunk independently (the old code) dropped a fractional sample and reset the
@@ -124,6 +136,13 @@ var _speaking_timers: Dictionary = {}  # pid → float countdown
 var _rtc:       WebRTCPeerConnection = null
 var _vch:       WebRTCDataChannel    = null
 var _rtc_open:  bool = false   # true once the DataChannel reaches STATE_OPEN
+
+# Diagnostic counters — reported to server every DIAG_INTERVAL seconds.
+const DIAG_INTERVAL := 10.0
+var _diag_timer:    float = DIAG_INTERVAL  # fire once quickly at start
+var _diag_tx_rtc:   int   = 0   # packets sent via DataChannel this interval
+var _diag_tx_ws:    int   = 0   # packets sent via WebSocket this interval
+var _diag_underrun: int   = 0   # times jitter buffer drained to zero this interval
 
 # Optional on-screen button + its icon, set by UIManager. The icon swaps between
 # the mic (transmitting) and muted-speaker (muted) SVG textures.
@@ -191,6 +210,13 @@ func _process(delta: float) -> void:
 				_on_voice_datagram(_vch.get_packet())
 				n += 1
 
+	# Periodic client-side diagnostic report sent to server.
+	if multiplayer.get_unique_id() != 1:
+		_diag_timer -= delta
+		if _diag_timer <= 0.0:
+			_diag_timer = DIAG_INTERVAL
+			_send_diag()
+
 	if _transmitting:
 		_send_timer -= delta
 		if _send_timer <= 0.0:
@@ -255,16 +281,19 @@ func _capture_and_send() -> void:
 	if _rate_cal_skipped < _RATE_CAL_SKIP:
 		_rate_cal_skipped += 1
 	elif _rate_cal_done < _RATE_CAL_CALLS:
+		if _rate_cal_t0 < 0:
+			_rate_cal_t0 = Time.get_ticks_msec()
 		_rate_cal_frames += available
 		_rate_cal_done   += 1
 		if _rate_cal_done == _RATE_CAL_CALLS:
-			var measured := float(_rate_cal_frames) / (_RATE_CAL_CALLS * SEND_INTERVAL)
-			if measured > 8000.0 and measured < 200000.0 and absf(measured - _capture_rate) > 2000.0:
-				push_warning("[voice] capture rate corrected %.0f → %.0f Hz (avg %.1f frames/20ms)" % [
-					_capture_rate, measured,
-					float(_rate_cal_frames) / float(_RATE_CAL_CALLS)])
-				_capture_rate = measured
-				_resample_reset()
+			# Log-only: frame counting is unreliable in the Web export (AudioEffectCapture
+			# returns 0 most ticks and delivers batches, inflating or shrinking the divisor).
+			# We trust get_mix_rate() instead and never write _capture_rate here.
+			var elapsed_ms := float(Time.get_ticks_msec() - _rate_cal_t0)
+			_rate_cal_measured = float(_rate_cal_frames) / maxf(elapsed_ms * 0.001, 0.001)
+			if _rate_cal_measured > 8000.0 and _rate_cal_measured < 200000.0 and absf(_rate_cal_measured - _capture_rate) > 2000.0:
+				push_warning("[voice] frame-count measured %.0f Hz; using get_mix_rate()=%.0f Hz (%.0f frames / %.0f ms)" % [
+					_rate_cal_measured, _capture_rate, _rate_cal_frames, elapsed_ms])
 
 	var frames = _mic_capture.get_buffer(available)
 
@@ -301,32 +330,26 @@ func _capture_and_send() -> void:
 	var my_id = multiplayer.get_unique_id()
 
 	if _rtc_open and _vch != null and _vch.get_ready_state() == WebRTCDataChannel.STATE_OPEN:
-		# High-quality path: PCM16 + format byte
+		# High-quality path: PCM16 over UDP DataChannel.
 		var payload := PackedByteArray()
 		payload.append(VOICE_FMT_PCM16)
 		payload.append_array(_pack_pcm16(samples))
 		_vch.put_packet(payload)
+		_diag_tx_rtc += 1
 	elif multiplayer.is_server():
-		# Fallback path: ADPCM + format byte
-		var enc := adpcm_encode(samples, _enc_predictor, _enc_index)
-		var bytes: PackedByteArray = enc["bytes"]
-		_enc_predictor = enc["predictor"]
-		_enc_index     = enc["index"]
-
+		# WebSocket fallback (listen-server): PCM16 to avoid ADPCM quantisation noise.
 		var payload := PackedByteArray()
-		payload.append(VOICE_FMT_ADPCM)
-		payload.append_array(bytes)
+		payload.append(VOICE_FMT_PCM16)
+		payload.append_array(_pack_pcm16(samples))
 		_rpc_play_voice.rpc(payload, my_id)
+		_diag_tx_ws += 1
 	else:
-		var enc := adpcm_encode(samples, _enc_predictor, _enc_index)
-		var bytes: PackedByteArray = enc["bytes"]
-		_enc_predictor = enc["predictor"]
-		_enc_index     = enc["index"]
-
+		# WebSocket fallback (dedicated server): PCM16 over relay.
 		var payload := PackedByteArray()
-		payload.append(VOICE_FMT_ADPCM)
-		payload.append_array(bytes)
+		payload.append(VOICE_FMT_PCM16)
+		payload.append_array(_pack_pcm16(samples))
 		_rpc_voice.rpc_id(1, payload, my_id)
+		_diag_tx_ws += 1
 
 # Clear the streaming resampler (call on mute/unmute and at each speech onset).
 func _resample_reset() -> void:
@@ -555,11 +578,50 @@ func _rpc_voice_answer(sdp: String) -> void:
 	if _rtc != null:
 		_rtc.set_remote_description("answer", sdp)
 
+## Client → server: periodic voice quality diagnostic. Server logs the payload.
+## Alphabetically between _rpc_voice_answer and _rpc_voice_ice — MUST stay here
+## to keep RPC indices in sync with voice_relay.gd on the server.
+@rpc("any_peer", "call_remote", "reliable")
+func _rpc_voice_diag(_payload: String) -> void:
+	pass   # server-only — handled in voice_relay.gd
+
 ## Trickle ICE, both directions (any_peer so the server can send it back).
 @rpc("any_peer", "call_remote", "reliable")
 func _rpc_voice_ice(media: String, index: int, name: String) -> void:
 	if _rtc != null:
 		_rtc.add_ice_candidate(media, index, name)
+
+# ── Client-side diagnostics ───────────────────────────────────────────────────
+func _send_diag() -> void:
+	var ch_state := "none"
+	if _vch != null:
+		var s: int = _vch.get_ready_state()
+		ch_state = ["CONNECTING","OPEN","CLOSING","CLOSED"][s] if s < 4 else str(s)
+
+	var jitter_info := ""
+	for pid in _jq.keys():
+		var q: PackedVector2Array = _jq.get(pid, PackedVector2Array())
+		var pos: int = _jq_pos.get(pid, 0)
+		var queued_ms := int(float(q.size() - pos) / float(VOICE_RATE) * 1000.0)
+		var playing: bool = bool(_jq_play.get(pid, false))
+		jitter_info += " peer%d:q%dms(%s)" % [pid, queued_ms, "play" if playing else "prebuf"]
+
+	var cal_str := "pending"
+	if _rate_cal_measured >= 0.0:
+		cal_str = "%.0fHz" % _rate_cal_measured
+	var payload := "peer=%d path=%s ch=%s cap=%.0fHz cal=%s tx_rtc=%d tx_ws=%d underruns=%d jitter=[%s]" % [
+		multiplayer.get_unique_id(),
+		"UDP/DataChannel" if _rtc_open else "WebSocket",
+		ch_state,
+		_capture_rate,
+		cal_str,
+		_diag_tx_rtc, _diag_tx_ws, _diag_underrun,
+		jitter_info.strip_edges()
+	]
+	_diag_tx_rtc   = 0
+	_diag_tx_ws    = 0
+	_diag_underrun = 0
+	_rpc_voice_diag.rpc_id(1, payload)
 
 # ── Playback ──────────────────────────────────────────────────────────────────
 # Decode an incoming packet and QUEUE it (the jitter buffer). _pump_speakers feeds
@@ -635,7 +697,15 @@ func _pump_speakers() -> void:
 		var n: int = min(deficit, queued)
 		if n <= 0:
 			if buffered <= 0:
-				_jq_play[pid] = false   # fully drained → re-prebuffer
+				# Generator drained: push a short silence pad so the audio stream keeps
+				# running smoothly (no click), then enter prebuf mode. The listener hears
+				# soft silence during the pad rather than an abrupt stop.
+				var pad := int(JITTER_SILENCE_PAD * rate)
+				var silence := PackedVector2Array()
+				silence.resize(pad)
+				pb.push_buffer(silence)
+				_jq_play[pid] = false   # re-prebuffer after the silence plays out
+				_diag_underrun += 1
 			continue
 		pb.push_buffer(q.slice(pos, pos + n))
 		pos += n
