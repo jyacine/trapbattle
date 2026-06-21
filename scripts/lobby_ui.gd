@@ -91,7 +91,7 @@ func _process(delta: float) -> void:
 	if _countdown <= 0.0:
 		_counting = false
 		if _net.is_captain:
-			_net.request_start()
+			_net.request_start(_selected_map)
 
 # â”€â”€ Initial menu screen â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 func _build_menu() -> void:
@@ -497,7 +497,7 @@ func _on_start_pressed() -> void:
 	if _start_btn:
 		_start_btn.disabled = true
 	_counting = false
-	_net.request_start()
+	_net.request_start(_selected_map)
 
 func _enter_lobby_room_deferred() -> void:
 	# Only build the room if lobby_ready hasn't already fired (we'd be freed by now).
@@ -507,7 +507,8 @@ func _enter_lobby_room_deferred() -> void:
 	if _countdown_label:
 		_countdown_label.text = "Connected - waiting for host..."
 
-func _on_lobby_ready(seed_val: int) -> void:
+func _on_lobby_ready(seed_val: int, map_id: int) -> void:
+	Config.selected_map = map_id
 	if _lobby_room and is_instance_valid(_lobby_room):
 		_lobby_room.queue_free()
 	start_game.emit(seed_val, true)

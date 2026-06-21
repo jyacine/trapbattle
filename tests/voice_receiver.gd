@@ -47,7 +47,7 @@ func _initialize() -> void:
 		print("[receiver] Lobby: %d peer(s)" % peers.size())
 	)
 
-	_net.lobby_ready.connect(func(_seed: int):
+	_net.lobby_ready.connect(func(_seed: int, _map: int):
 		_game_started = true
 		print("[receiver] Game started")
 	)

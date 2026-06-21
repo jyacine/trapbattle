@@ -1,7 +1,7 @@
 extends Node
 class_name NetworkManager
 
-signal lobby_ready(seed_val: int)
+signal lobby_ready(seed_val: int, map_id: int)
 signal lobby_updated(peer_ids: Array)
 signal connected
 signal peer_left(pid: int)            # pid = -1 means the whole server is gone
@@ -85,10 +85,8 @@ func _on_connected_ok() -> void:
 
 # ── Start the game ────────────────────────────────────────────────────────────
 ## Called by the captain (host / first joiner) when ready to start.
-## map_id < 0 means "use the locally selected map" (Config.selected_map).
-func request_start(map_id: int = -1) -> void:
-	if map_id < 0:
-		map_id = Config.selected_map
+## Caller must pass the desired map_id; defaults to 1 (Labyrinth).
+func request_start(map_id: int = 1) -> void:
 	if multiplayer.is_server():
 		# Listen-server host: trigger directly
 		_do_start(map_id)
@@ -118,9 +116,8 @@ func _rpc_request_start(map_id: int) -> void:
 func _rpc_start_game(seed_val: int, asns: Dictionary, map_id: int) -> void:
 	assignments = asns
 	_game_map   = map_id
-	Config.selected_map = map_id
 	is_captain = (asns.get(multiplayer.get_unique_id(), -1) == 0)
-	lobby_ready.emit(seed_val)
+	lobby_ready.emit(seed_val, map_id)
 
 # ── Client sends name and color preference to the server/host ────────────────
 @rpc("any_peer", "call_remote", "reliable")
@@ -186,9 +183,8 @@ func _on_server_left() -> void:
 func _rpc_late_join(seed_val: int, asns: Dictionary, map_id: int) -> void:
 	assignments = asns
 	_game_map   = map_id
-	Config.selected_map = map_id
 	is_captain  = false
-	lobby_ready.emit(seed_val)
+	lobby_ready.emit(seed_val, map_id)
 
 ## Server → all peers (call_local so host also runs it):
 ## spawn one new player node for the peer that just joined mid-game.
