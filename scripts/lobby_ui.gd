@@ -505,7 +505,7 @@ func _enter_lobby_room_deferred() -> void:
 	if _lobby_room != null: return
 	_enter_lobby_room()
 	if _countdown_label:
-		_countdown_label.text = "Connected â€" waiting for hostâ€¦"
+		_countdown_label.text = "Connected - waiting for host..."
 
 func _on_lobby_ready(seed_val: int) -> void:
 	if _lobby_room and is_instance_valid(_lobby_room):
