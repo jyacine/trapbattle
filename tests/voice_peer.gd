@@ -99,20 +99,15 @@ func _initialize() -> void:
 	_voice.voice_received.connect(_on_voice_received)
 
 	# ── Send loop — voice_received fires in the 20 ms gaps between sends ────────
+	# PCM16 matches the real in-game WebSocket fallback path (voice_manager.gd).
 	var frame_len := int(VOICE_RATE * SEND_INTERVAL)
-	var pred := 0
-	var idx  := 0
 	var sent := 0
 	for off in range(0, samples.size(), frame_len):
 		var chunk: PackedFloat32Array = samples.slice(off, mini(off + frame_len, samples.size()))
 		if chunk.is_empty(): continue
-		var enc: Dictionary    = VoiceManager.adpcm_encode(chunk, pred, idx)
-		var bytes: PackedByteArray = enc["bytes"]
-		pred = int(enc["predictor"])
-		idx  = int(enc["index"])
 		var payload := PackedByteArray()
-		payload.append(VoiceManager.VOICE_FMT_ADPCM)
-		payload.append_array(bytes)
+		payload.append(VoiceManager.VOICE_FMT_PCM16)
+		payload.append_array(VoiceManager._pack_pcm16(chunk))
 		_voice._rpc_voice.rpc_id(1, payload, _main.multiplayer.get_unique_id())
 		sent += 1
 		await create_timer(SEND_INTERVAL).timeout

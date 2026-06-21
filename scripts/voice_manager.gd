@@ -307,25 +307,18 @@ func _capture_and_send() -> void:
 		payload.append_array(_pack_pcm16(samples))
 		_vch.put_packet(payload)
 	elif multiplayer.is_server():
-		# Fallback path: ADPCM + format byte
-		var enc := adpcm_encode(samples, _enc_predictor, _enc_index)
-		var bytes: PackedByteArray = enc["bytes"]
-		_enc_predictor = enc["predictor"]
-		_enc_index     = enc["index"]
-
+		# WebSocket fallback (listen-server): PCM16 removes ADPCM compression artifacts.
 		var payload := PackedByteArray()
-		payload.append(VOICE_FMT_ADPCM)
-		payload.append_array(bytes)
+		payload.append(VOICE_FMT_PCM16)
+		payload.append_array(_pack_pcm16(samples))
 		_rpc_play_voice.rpc(payload, my_id)
 	else:
-		var enc := adpcm_encode(samples, _enc_predictor, _enc_index)
-		var bytes: PackedByteArray = enc["bytes"]
-		_enc_predictor = enc["predictor"]
-		_enc_index     = enc["index"]
-
+		# WebSocket fallback (dedicated server): PCM16 over relay. ~48 KB/s per speaker;
+		# ADPCM's 4-bit quantization noise was the main cause of bad voice quality when
+		# WebRTC DataChannel is unavailable.
 		var payload := PackedByteArray()
-		payload.append(VOICE_FMT_ADPCM)
-		payload.append_array(bytes)
+		payload.append(VOICE_FMT_PCM16)
+		payload.append_array(_pack_pcm16(samples))
 		_rpc_voice.rpc_id(1, payload, my_id)
 
 # Clear the streaming resampler (call on mute/unmute and at each speech onset).
