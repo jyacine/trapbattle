@@ -86,19 +86,30 @@ silently misroutes every call. When adding an `@rpc` to a shared script, add it 
 ```
 mic → AudioEffectCapture (bus MUTED, no self-monitoring)
     → VAD (RMS gate, silence not sent)
-    → resample 44.1/48k → 16 kHz  (anti-aliased: average input window per output sample)
-    → IMA-ADPCM encode (4-bit, ~0.5 byte/sample ≈ 64 kbps while speaking)
-    → TRANSPORT (§6)
-    ── server relays to other peers ──
-    → IMA-ADPCM decode
-    → per-speaker JITTER BUFFER (prebuffer ~120 ms, steady fill, re-buffer on underrun)
+    → resample 44.1/48k → 24 kHz  (anti-aliased: average input window per output sample)
+    ┌── Opus path (web, Chrome/Firefox) ─────────────────────────────────────────┐
+    │  → JavaScriptBridge → browser AudioEncoder (WebCodecs) → Opus @ 32 kbps   │
+    │  → TRANSPORT (§6)  ── server relays bytes opaquely ──                      │
+    │  → JavaScriptBridge → browser AudioDecoder (WebCodecs) → float32 PCM       │
+    └─────────────────────────────────────────────────────────────────────────────┘
+    ┌── PCM16 fallback (desktop, old browser) ───────────────────────────────────┐
+    │  → PCM16 encode (~384 kbps)  → TRANSPORT  → PCM16 decode                  │
+    └─────────────────────────────────────────────────────────────────────────────┘
+    → per-speaker JITTER BUFFER (60 ms target, 30 ms prebuf, re-buffer on underrun)
     → AudioStreamGenerator → AudioStreamPlayer
 ```
 
 Key decisions:
 - **Mic bus muted** so you never hear yourself (the capture effect taps the chain
   before the mute stage, so capture still works). (PR #18.)
-- **16 kHz wideband + anti-aliased downsample** for clarity (was 8 kHz with aliasing). (PR #18.)
+- **24 kHz wideband + anti-aliased downsample** for clarity. (PR #18.)
+- **Opus codec** (browser WebCodecs API) encodes at 32 kbps — ~12× smaller than
+  PCM16. Activated via `_init_opus_web()` at startup; falls back to PCM16 on
+  desktop or browsers without `AudioEncoder`. The JS glue (`window.TBVoice`)
+  is injected into the HTML export via `html/head_include` in `export_presets.cfg`.
+  The JS glue is defined at runtime via `JavaScriptBridge.eval()` in `_init_opus_web()` —
+  no HTML template change needed. Format byte `VOICE_FMT_OPUS=2` distinguishes
+  packets from legacy `VOICE_FMT_PCM16=1`.
 - **Jitter buffer** smooths bursty arrival; without it the generator underran →
   choppy. (PR #19.)
 - The server **relays bytes opaquely** (no decode), so codec/rate are a client-only
@@ -120,7 +131,7 @@ UI (`ui_manager.gd`): mic mute/unmute button + per-speaker speaking icon
 
 **WebRTC path details (when enabled):**
 - Topology: **star** — each client ↔ server DataChannel; server forwards each
-  speaker's audio to the others (`[sender_id i32][ADPCM]`). Not a P2P mesh.
+  speaker's audio to the others (`[sender_id i32][format_byte][audio]`). Not a P2P mesh.
 - Signaling (SDP offer/answer + trickle ICE) rides the **existing reliable RPC
   channel** via `_rpc_voice_offer` / `_rpc_voice_answer` / `_rpc_voice_ice`.
 - Negotiated DataChannel `id=1`, `ordered=false`, `maxRetransmits=0`.
