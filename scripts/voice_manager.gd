@@ -98,7 +98,7 @@ var _enc_index:     int = 0
 
 # Opus codec via browser WebCodecs API (web-only). When true, all voice traffic
 # uses Opus-encoded packets (VOICE_FMT_OPUS) instead of raw PCM16.
-var _opus_web: bool = false
+var _opus_web: bool = true
 
 # Capture-rate: use AudioServer.get_mix_rate() — the authoritative browser audio rate.
 # We previously tried frame-count calibration but AudioEffectCapture.get_frames_available()
@@ -355,7 +355,7 @@ func _capture_and_send() -> void:
 	if _opus_web:
 		# Opus path: submit samples to the browser's AudioEncoder; encoded packets
 		# are polled and sent in _poll_opus_encoded() each _process tick.
-		var js_f32 := JavaScriptBridge.create_object("Float32Array", samples)
+		var js_f32: JavaScriptObject = JavaScriptBridge.create_object("Float32Array", samples)
 		JavaScriptBridge.get_interface("window")["_tbv_pcm"] = js_f32
 		JavaScriptBridge.eval("window.TBVoice.encode(window._tbv_pcm, %d)" % Time.get_ticks_usec())
 	elif _rtc_open and _vch != null and _vch.get_ready_state() == WebRTCDataChannel.STATE_OPEN:
@@ -722,7 +722,7 @@ func _push_to_speaker(sender_id: int, bytes: PackedByteArray) -> void:
 	if fmt == VOICE_FMT_OPUS and _opus_web:
 		# Async: submit to the JS decoder; _poll_opus_decoded() pushes PCM next frame.
 		JavaScriptBridge.eval("window.TBVoice.initDec(%d)" % sender_id)
-		var js_bytes := JavaScriptBridge.create_object("Uint8Array", body)
+		var js_bytes: JavaScriptObject = JavaScriptBridge.create_object("Uint8Array", body)
 		JavaScriptBridge.get_interface("window")["_tbv_opus"] = js_bytes
 		JavaScriptBridge.eval("window.TBVoice.decode(%d, window._tbv_opus, %d)" % [sender_id, Time.get_ticks_usec()])
 		return
