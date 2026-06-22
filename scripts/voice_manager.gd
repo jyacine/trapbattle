@@ -598,6 +598,15 @@ func _rpc_play_voice(audio_bytes: PackedByteArray, sender_id: int) -> void:
 # existing reliable RPC channel. The channel is "negotiated" (both sides create it
 # with the same id) so it needs no in-band SDP renegotiation.
 func _setup_webrtc() -> void:
+	# On web builds the browser supplies a real WebRTC implementation. On native
+	# builds the webrtc-native GDExtension is required; without it the class is
+	# a stub named "WebRTCPeerConnectionExtension" that crashes on initialize().
+	var probe: WebRTCPeerConnection = WebRTCPeerConnection.new()
+	var is_stub: bool = probe.get_class() == "WebRTCPeerConnectionExtension"
+	probe.free()
+	if is_stub:
+		push_warning("[voice] webrtc-native not installed — using WebSocket relay")
+		return
 	_rtc = WebRTCPeerConnection.new()
 	if _rtc.initialize({ "iceServers": [ { "urls": [RTC_STUN] } ] }) != OK:
 		push_warning("[voice] WebRTC init failed — using WebSocket relay")
