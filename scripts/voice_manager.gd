@@ -96,6 +96,10 @@ var _local_speaking: bool = false    # current VAD state for the local mic
 var _enc_predictor: int = 0
 var _enc_index:     int = 0
 
+# Opus codec via browser WebCodecs API (web-only). When true, all voice traffic
+# uses Opus-encoded packets (VOICE_FMT_OPUS) instead of raw PCM16.
+var _opus_web: bool = false
+
 # Capture-rate: use AudioServer.get_mix_rate() — the authoritative browser audio rate.
 # We previously tried frame-count calibration but AudioEffectCapture.get_frames_available()
 # in the Godot Web export is unreliable: it returns 0 most ticks and delivers batches,
@@ -153,16 +157,31 @@ const _MUTE_TEX := preload("res://assets/icons/icon_mute.svg")
 
 const VOICE_FMT_ADPCM := 0
 const VOICE_FMT_PCM16 := 1
+const VOICE_FMT_OPUS  := 2
 
 # ─────────────────────────────────────────────────────────────────────────────
 func _ready() -> void:
 	if not multiplayer.has_multiplayer_peer():
 		return
 	_setup_mic()
+	_init_opus_web()
 	# Mic is open (not muted) but stays silent on the network until VAD hears speech.
 	# Bring up the WebRTC voice link (clients only; the dedicated server answers).
 	if USE_WEBRTC and not multiplayer.is_server():
 		_setup_webrtc()
+
+func _init_opus_web() -> void:
+	if not OS.has_feature("web"):
+		return
+	if not bool(JavaScriptBridge.eval("typeof AudioEncoder !== 'undefined'")):
+		push_warning("[voice] WebCodecs AudioEncoder not available — using PCM16")
+		return
+	# Define the browser-side Opus glue entirely from GDScript so no HTML template
+	# change is needed. Single-quoted JS strings avoid conflicts with GDScript quotes.
+	var js: String = "window.TBVoice=(function(){var enc=null,decs={},encQ=[],decQ={},SR=24000;function init(sr,br){SR=sr;enc=new AudioEncoder({output:function(c){var b=new Uint8Array(c.byteLength);c.copyTo(b);encQ.push(b);},error:function(e){console.error('[TBVoice enc]',e);}});enc.configure({codec:'opus',sampleRate:sr,numberOfChannels:1,bitrate:br});}function encode(f32,ts){if(!enc)return;var ad=new AudioData({format:'f32-planar',sampleRate:SR,numberOfFrames:f32.length,numberOfChannels:1,timestamp:ts,data:f32});enc.encode(ad);ad.close();}function pollEnc(){return encQ.splice(0).map(function(b){return Array.from(b);});}function initDec(pid){if(decs[pid])return;decQ[pid]=[];var dec=new AudioDecoder({output:function(ad){var b=new Float32Array(ad.numberOfFrames);ad.copyTo(b,{planeIndex:0,format:'f32-planar'});decQ[pid].push(b);ad.close();},error:function(e){console.error('[TBVoice dec pid='+pid+']',e);}});dec.configure({codec:'opus',sampleRate:SR,numberOfChannels:1});decs[pid]=dec;}function decode(pid,bytes,ts){var dec=decs[pid];if(!dec)return;dec.decode(new EncodedAudioChunk({type:'key',timestamp:ts,data:bytes}));}function pollDec(pid){return(decQ[pid]||[]).splice(0).map(function(b){return Array.from(b);});}return{init:init,encode:encode,pollEnc:pollEnc,initDec:initDec,decode:decode,pollDec:pollDec};})();"
+	JavaScriptBridge.eval(js, true)
+	JavaScriptBridge.eval("window.TBVoice.init(%d, 32000)" % VOICE_RATE, true)
+	_opus_web = true
 
 func _setup_mic() -> void:
 	_capture_rate = AudioServer.get_mix_rate()
@@ -222,6 +241,10 @@ func _process(delta: float) -> void:
 		if _send_timer <= 0.0:
 			_send_timer = SEND_INTERVAL
 			_capture_and_send()
+
+	if _opus_web:
+		_poll_opus_encoded()
+		_poll_opus_decoded()
 
 	# Drain the jitter buffers into the audio generators at a steady depth.
 	_pump_speakers()
@@ -329,7 +352,13 @@ func _capture_and_send() -> void:
 
 	var my_id = multiplayer.get_unique_id()
 
-	if _rtc_open and _vch != null and _vch.get_ready_state() == WebRTCDataChannel.STATE_OPEN:
+	if _opus_web:
+		# Opus path: submit samples to the browser's AudioEncoder; encoded packets
+		# are polled and sent in _poll_opus_encoded() each _process tick.
+		var js_f32 := JavaScriptBridge.create_object("Float32Array", samples)
+		JavaScriptBridge.get_interface("window")["_tbv_pcm"] = js_f32
+		JavaScriptBridge.eval("window.TBVoice.encode(window._tbv_pcm, %d)" % Time.get_ticks_usec())
+	elif _rtc_open and _vch != null and _vch.get_ready_state() == WebRTCDataChannel.STATE_OPEN:
 		# High-quality path: PCM16 over UDP DataChannel.
 		var payload := PackedByteArray()
 		payload.append(VOICE_FMT_PCM16)
@@ -350,6 +379,46 @@ func _capture_and_send() -> void:
 		payload.append_array(_pack_pcm16(samples))
 		_rpc_voice.rpc_id(1, payload, my_id)
 		_diag_tx_ws += 1
+
+# Poll the JS Opus encoder queue and send any completed packets over the active channel.
+# Called every _process tick so the async output doesn't wait for the next VAD interval.
+func _poll_opus_encoded() -> void:
+	var raw: String = JavaScriptBridge.eval("(function(){var c=window.TBVoice.pollEnc(),r=[];for(var i=0;i<c.length;i++){r.push(c[i]);}return JSON.stringify(r);})()")
+	var chunks = JSON.parse_string(raw)
+	if not chunks is Array or chunks.is_empty():
+		return
+	var my_id: int = multiplayer.get_unique_id()
+	for chunk in chunks:
+		var payload := PackedByteArray()
+		payload.append(VOICE_FMT_OPUS)
+		for b in chunk:
+			payload.append(int(b))
+		if _rtc_open and _vch != null and _vch.get_ready_state() == WebRTCDataChannel.STATE_OPEN:
+			_vch.put_packet(payload)
+			_diag_tx_rtc += 1
+		elif multiplayer.is_server():
+			_rpc_play_voice.rpc(payload, my_id)
+			_diag_tx_ws += 1
+		else:
+			_rpc_voice.rpc_id(1, payload, my_id)
+			_diag_tx_ws += 1
+
+# Poll the JS Opus decoder queue for each active speaker and push decoded PCM to
+# their jitter buffers. Called every _process tick so decoded audio is never stale.
+func _poll_opus_decoded() -> void:
+	for pid in _speakers.keys():
+		var raw: String = JavaScriptBridge.eval("JSON.stringify(window.TBVoice.pollDec(%d))" % pid)
+		var frames = JSON.parse_string(raw)
+		if not frames is Array:
+			continue
+		for frame in frames:
+			if not frame is Array:
+				continue
+			var mono := PackedFloat32Array()
+			mono.resize(frame.size())
+			for i in frame.size():
+				mono[i] = clampf(float(frame[i]), -1.0, 1.0)
+			_push_pcm_to_jitter(pid, mono)
 
 # Clear the streaming resampler (call on mute/unmute and at each speech onset).
 func _resample_reset() -> void:
@@ -609,12 +678,14 @@ func _send_diag() -> void:
 	var cal_str := "pending"
 	if _rate_cal_measured >= 0.0:
 		cal_str = "%.0fHz" % _rate_cal_measured
-	var payload := "peer=%d path=%s ch=%s cap=%.0fHz cal=%s tx_rtc=%d tx_ws=%d underruns=%d jitter=[%s]" % [
+	var codec_str := "opus" if _opus_web else "pcm16"
+	var payload := "peer=%d path=%s ch=%s cap=%.0fHz cal=%s codec=%s tx_rtc=%d tx_ws=%d underruns=%d jitter=[%s]" % [
 		multiplayer.get_unique_id(),
 		"UDP/DataChannel" if _rtc_open else "WebSocket",
 		ch_state,
 		_capture_rate,
 		cal_str,
+		codec_str,
 		_diag_tx_rtc, _diag_tx_ws, _diag_underrun,
 		jitter_info.strip_edges()
 	]
@@ -648,21 +719,32 @@ func _push_to_speaker(sender_id: int, bytes: PackedByteArray) -> void:
 		_jq_pos[sender_id]  = 0
 		_jq_play[sender_id] = false
 
+	if fmt == VOICE_FMT_OPUS and _opus_web:
+		# Async: submit to the JS decoder; _poll_opus_decoded() pushes PCM next frame.
+		JavaScriptBridge.eval("window.TBVoice.initDec(%d)" % sender_id)
+		var js_bytes := JavaScriptBridge.create_object("Uint8Array", body)
+		JavaScriptBridge.get_interface("window")["_tbv_opus"] = js_bytes
+		JavaScriptBridge.eval("window.TBVoice.decode(%d, window._tbv_opus, %d)" % [sender_id, Time.get_ticks_usec()])
+		return
+
 	var mono: PackedFloat32Array
 	if fmt == VOICE_FMT_PCM16:
 		mono = _unpack_pcm16(body)
 	else:
 		mono = adpcm_decode(body)
+	_push_pcm_to_jitter(sender_id, mono)
+
+# Append decoded mono PCM to sender_id's jitter queue, emitting voice_received and
+# capping the queue at JITTER_MAX to prevent unbounded latency growth.
+func _push_pcm_to_jitter(sender_id: int, mono: PackedFloat32Array) -> void:
 	voice_received.emit(sender_id, mono)
 	var frames := PackedVector2Array()
 	frames.resize(mono.size())
 	for i in mono.size():
 		var s := mono[i]
 		frames[i] = Vector2(s, s)
-
 	var q: PackedVector2Array = _jq[sender_id]
 	q.append_array(frames)
-	# Bound queued latency: if a burst overfills, drop the oldest frames.
 	var pos: int = _jq_pos[sender_id]
 	var max_frames := int(JITTER_MAX * float(VOICE_RATE))
 	if q.size() - pos > max_frames:
