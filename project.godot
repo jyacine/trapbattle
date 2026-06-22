@@ -28,6 +28,10 @@ driver/enable_input=true
 
 Config="*res://scripts/config.gd"
 
+[debug]
+
+shapes/collision/enable_pcollision_shape_visibility=false
+
 [display]
 
 window/size/viewport_width=1280

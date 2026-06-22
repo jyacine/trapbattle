@@ -11,6 +11,8 @@ var _players: Dictionary = {}
 
 # ────────────────────────────────────────────────────────────────────────────
 func _ready() -> void:
+	get_tree().debug_collisions_hint = false   # never show collision wireframes in-game
+
 	network_manager = NetworkManager.new()
 	network_manager.name = "NetworkManager"
 	add_child(network_manager)
@@ -462,8 +464,8 @@ func _props_village_real(wall_cells: Array, dead_ends: Array, grid: Array, rows:
 				inst.rotation.y = float((r + c) % 4) * PI * 0.5
 				inst.scale = Vector3.ONE * 0.9
 				maze_node.add_child(inst)
-				# Thin collision box along the fence length.
-				_add_prop_collision(inst, Vector3(cs * 0.9, 1.2, 0.12), Vector3.ZERO)
+				# Thin collision box along the fence length: height 0.9 m, sitting on the ground.
+				_add_prop_collision(inst, Vector3(cs * 0.9, 0.9, 0.12), Vector3(0, 0.45, 0))
 				fence_count += 1
 
 # ── Map materials ─────────────────────────────────────────────────────────────

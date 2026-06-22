@@ -146,7 +146,7 @@ var _vm_recoil:      float  = 0.0
 
 # ── Jump ─────────────────────────────────────────────────────────────────────
 var _jump_vel: float = 0.0
-const JUMP_SPEED   := 5.5
+const JUMP_SPEED   := 7.0    # peak height ≈ 1.75 m — clears 0.9 m fence and lands on 0.75 m crates
 const JUMP_GRAVITY := 14.0
 
 # ── Debug overlay (toggle with F3; on by default so it shows on mobile) ────────
@@ -379,9 +379,17 @@ func _physics_process(delta: float) -> void:
 		if dir.length() > 1.0:
 			dir = dir.normalized()
 
-		# Physics-driven movement: smooth wall sliding, no jitter.
+		# Physics-driven movement: wall sliding (XZ) + jump arc gravity (Y).
+		# Gravity runs here so the player falls correctly when walking off a prop.
+		if _jump_vel != 0.0 or position.y > 0.01:
+			_jump_vel -= JUMP_GRAVITY * delta
 		velocity = dir * move_speed * speed_mult * sprint_mult
+		velocity.y = _jump_vel
 		move_and_slide()
+		_jump_vel = velocity.y   # zeroed by move_and_slide when landing on a prop surface
+		if position.y < 0.0:    # floor snap — no StaticBody3D at y = 0
+			position.y = 0.0
+			if _jump_vel < 0.0: _jump_vel = 0.0
 		_dbg_slides     = get_slide_collision_count()
 		_dbg_real_speed = velocity.length()
 
@@ -414,13 +422,6 @@ func _physics_process(delta: float) -> void:
 			_cancel_trap_aim()
 		else:
 			_update_trap_aim()
-
-	# Jump arc: manual Y velocity separate from move_and_slide() horizontal movement.
-	if _jump_vel != 0.0 or position.y > 0.01:
-		_jump_vel -= JUMP_GRAVITY * delta
-		position.y = maxf(0.0, position.y + _jump_vel * delta)
-		if position.y <= 0.0:
-			_jump_vel = 0.0
 
 	if multiplayer.has_multiplayer_peer():
 		_net_pos.rpc(position, yaw)
@@ -791,14 +792,11 @@ func _net_gun_type(gtype: int) -> void:
 		_remote_gun_mi.visible = (gtype >= 0)
 
 # ── Remote body ───────────────────────────────────────────────────────────────
-func _build_remote_body() -> void:
-	_remote_body_root = Node3D.new()
-	add_child(_remote_body_root)
-
-	var pc  = Config.PLAYER_COLORS[player_index % Config.PLAYER_COLORS.size()]
-	var bm  = StandardMaterial3D.new()
+func _build_player_mesh_body(parent: Node3D) -> void:
+	var pc = Config.PLAYER_COLORS[player_index % Config.PLAYER_COLORS.size()]
+	var bm = StandardMaterial3D.new()
 	bm.albedo_color = pc.darkened(0.35); bm.metallic = 0.8; bm.roughness = 0.3
-	var am  = StandardMaterial3D.new()
+	var am = StandardMaterial3D.new()
 	am.albedo_color = pc; am.emission_enabled = true
 	am.emission = pc; am.emission_energy_multiplier = 0.8
 	am.metallic = 1.0; am.roughness = 0.1
@@ -815,7 +813,14 @@ func _build_remote_body() -> void:
 	for p in parts:
 		var box = CSGBox3D.new()
 		box.size = p[0]; box.position = p[1]; box.material = p[2]
-		_remote_body_root.add_child(box)
+		parent.add_child(box)
+
+func _build_remote_body() -> void:
+	_remote_body_root = Node3D.new()
+	add_child(_remote_body_root)
+
+	var pc = Config.PLAYER_COLORS[player_index % Config.PLAYER_COLORS.size()]
+	_build_player_mesh_body(_remote_body_root)
 
 	# Gun held in right hand — hidden until opponent picks one up.
 	var gm = StandardMaterial3D.new()
@@ -1013,24 +1018,7 @@ func _end_death_replay() -> void:
 
 func _make_replay_avatar() -> Node3D:
 	var root := Node3D.new()
-	var pc: Color = Config.PLAYER_COLORS[player_index % Config.PLAYER_COLORS.size()]
-	var mat := StandardMaterial3D.new()
-	mat.albedo_color = pc
-	mat.emission_enabled = true; mat.emission = pc; mat.emission_energy_multiplier = 0.7
-	mat.metallic = 0.4; mat.roughness = 0.4
-	# Body capsule
-	var body := MeshInstance3D.new()
-	var cap := CapsuleMesh.new(); cap.radius = 0.30; cap.height = 1.6
-	body.mesh = cap; body.set_surface_override_material(0, mat)
-	body.position = Vector3(0, 0.9, 0)
-	root.add_child(body)
-	# Forward-pointing nose cone (shows facing direction from above)
-	var nose := MeshInstance3D.new()
-	var cone := CylinderMesh.new(); cone.top_radius = 0.0; cone.bottom_radius = 0.20; cone.height = 0.5
-	nose.mesh = cone; nose.set_surface_override_material(0, mat)
-	nose.rotation = Vector3(-PI / 2.0, 0, 0)   # +Y → -Z (player forward)
-	nose.position = Vector3(0, 0.9, -0.55)
-	root.add_child(nose)
+	_build_player_mesh_body(root)
 	return root
 
 # ── Viewmodel ─────────────────────────────────────────────────────────────────
