@@ -1243,50 +1243,44 @@ func _input(event: InputEvent) -> void:
 
 	elif event is InputEventScreenDrag:
 		var drag := event as InputEventScreenDrag
-		if event.index == _joy_id:
-			_joy_update(drag.position)
-			get_viewport().set_input_as_handled()
-		elif event.index == _look_id:
-			# Higher gain so a short finger swipe turns a useful amount (was 1.8 —
-			# turning felt sluggish; 3.2 was a touch too twitchy, so 2.6).
-			var sens: float = player.mouse_sensitivity * 2.6
-			# Compute the delta from position ourselves instead of trusting
-			# drag.relative: Godot inflates `relative` (~2x with two touches —
-			# godotengine/godot#94346, #33470) whenever a second finger is down.
-			# Moving (joystick) + turning (this drag) means TWO fingers, so relative
-			# comes back doubled and snaps the view — the chaotic turn-while-moving.
-			# Tracking our own previous position sidesteps the bug entirely. The
-			# clamp still guards against a coalesced lump after a frame hitch.
-			var dx := clampf(drag.position.x - _look_prev.x, -60.0, 60.0)
-			var dy := clampf(drag.position.y - _look_prev.y, -60.0, 60.0)
-			_look_prev = drag.position
-			player._pending_yaw_delta -= dx * sens
-			player.pitch = clamp(player.pitch - dy * sens, -PI / 3.0, PI / 3.0)
-			if player.camera_node:
-				player.camera_node.rotation.x = player.pitch
-			get_viewport().set_input_as_handled()
-		elif event.index == _fire_id:
-			# Dragging while holding fire button turns the camera (fire-to-turn)
-			var sens: float = player.mouse_sensitivity * 2.6
-			var dx := clampf(drag.position.x - _look_prev_fire.x, -60.0, 60.0)
-			var dy := clampf(drag.position.y - _look_prev_fire.y, -60.0, 60.0)
-			_look_prev_fire = drag.position
-			player._pending_yaw_delta -= dx * sens
-			player.pitch = clamp(player.pitch - dy * sens, -PI / 3.0, PI / 3.0)
-			if player.camera_node:
-				player.camera_node.rotation.x = player.pitch
+		var dpos: Vector2 = drag.position
+		# Button-anchored turn/aim drags stay keyed to their own finger index.
+		if event.index == _fire_id:
+			_apply_turn(dpos - _look_prev_fire)
+			_look_prev_fire = dpos
 			get_viewport().set_input_as_handled()
 		elif event.index == _trap_id:
-			# Dragging while holding trap button steers the aim arc
-			var sens: float = player.mouse_sensitivity * 2.6
-			var dx := clampf(drag.position.x - _look_prev_trap.x, -60.0, 60.0)
-			var dy := clampf(drag.position.y - _look_prev_trap.y, -60.0, 60.0)
-			_look_prev_trap = drag.position
-			player._pending_yaw_delta -= dx * sens
-			player.pitch = clamp(player.pitch - dy * sens, -PI / 3.0, PI / 3.0)
-			if player.camera_node:
-				player.camera_node.rotation.x = player.pitch
+			_apply_turn(dpos - _look_prev_trap)
+			_look_prev_trap = dpos
 			get_viewport().set_input_as_handled()
+		# Joystick (move) and look (turn) are routed by SCREEN REGION, not by the
+		# touch index. Godot HTML5 multi-touch can deliver a drag under the OTHER
+		# finger index when two fingers are down (godot #94346 / #33470), so a
+		# left-side joystick drag could arrive tagged with the look index and spin
+		# the camera -- the chaotic movement when you hold look (right) then drag to
+		# move (left). Routing by position is immune to that index swap.
+		elif _joy_id != -1 and dpos.x < vp_hw:
+			_joy_update(dpos)
+			get_viewport().set_input_as_handled()
+		elif _look_id != -1 and dpos.x >= vp_hw:
+			_apply_turn(dpos - _look_prev)
+			_look_prev = dpos
+			get_viewport().set_input_as_handled()
+
+func _apply_turn(delta: Vector2) -> void:
+	if player == null:
+		return
+	# Gain 2.6: a short swipe turns a useful amount without feeling twitchy.
+	# Delta comes from tracked positions (never drag.relative, which Godot
+	# inflates with a second finger down); clamp guards a coalesced lump.
+	var sens: float = player.mouse_sensitivity * 2.6
+	var dx := clampf(delta.x, -60.0, 60.0)
+	var dy := clampf(delta.y, -60.0, 60.0)
+	player._pending_yaw_delta -= dx * sens
+	player.pitch = clamp(player.pitch - dy * sens, -PI / 3.0, PI / 3.0)
+	if player.camera_node:
+		player.camera_node.rotation.x = player.pitch
+
 
 # Move the knob toward `pos` (clamped to ring) and update the strafe vector.
 func _joy_update(pos: Vector2) -> void:
