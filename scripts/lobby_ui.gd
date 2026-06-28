@@ -1,4 +1,4 @@
-extends CanvasLayer
+﻿extends CanvasLayer
 class_name LobbyUI
 
 signal start_game(seed_val: int, is_mp: bool)
@@ -41,6 +41,7 @@ var _counting:  bool  = false
 var _mobile_web: bool = false
 var _last_prompt_ms: int = 0   # debounce duplicate tap â†’ prompt (touch + emulated mouse)
 var _pending_name_field: LineEdit = null  # field awaiting DOM-input result
+var _rejected: bool = false           # set when server rejects us (game in progress)
 
 # â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 func _ready() -> void:
@@ -48,6 +49,7 @@ func _ready() -> void:
 	_net.lobby_ready.connect(_on_lobby_ready)
 	_net.lobby_updated.connect(_on_lobby_updated)
 	_net.connected.connect(_on_connected)
+	_net.game_in_progress.connect(_on_game_in_progress)
 	_mobile_web = OS.has_feature("web") and UIManager._is_mobile_device()
 	_build_menu()
 
@@ -503,9 +505,33 @@ func _enter_lobby_room_deferred() -> void:
 	# Only build the room if lobby_ready hasn't already fired (we'd be freed by now).
 	if not is_instance_valid(self): return
 	if _lobby_room != null: return
+	if _rejected: return   # server told us game is in progress — don't build a lobby
 	_enter_lobby_room()
 	if _countdown_label:
 		_countdown_label.text = "Connected - waiting for host..."
+
+func _on_game_in_progress() -> void:
+	_rejected = true
+	for c: Node in _menu_nodes:
+		if is_instance_valid(c): c.visible = false
+
+	var bg = ColorRect.new()
+	bg.set_anchors_preset(Control.PRESET_FULL_RECT)
+	bg.color = Color(0.05, 0.05, 0.10, 0.96)
+	add_child(bg)
+
+	var msg = Label.new()
+	msg.text = "Game already in progress\nPlease wait for the current match to end, then reconnect."
+	msg.add_theme_font_size_override("font_size", 26)
+	msg.add_theme_color_override("font_color", Color(1.0, 0.75, 0.2))
+	msg.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	msg.vertical_alignment   = VERTICAL_ALIGNMENT_CENTER
+	msg.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	msg.set_anchors_preset(Control.PRESET_FULL_RECT)
+	add_child(msg)
+
+	get_tree().create_timer(4.0).timeout.connect(func():
+		get_tree().reload_current_scene())
 
 func _on_lobby_ready(seed_val: int, map_id: int) -> void:
 	Config.selected_map = map_id

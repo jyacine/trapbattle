@@ -17,7 +17,6 @@ func _ready() -> void:
 	network_manager.name = "NetworkManager"
 	add_child(network_manager)
 	network_manager.peer_left.connect(_on_peer_left)
-	network_manager.player_joined_mid_game.connect(_on_player_joined_mid_game)
 
 	var lobby = LobbyUI.new()
 	lobby.name = "LobbyUI"
@@ -724,24 +723,6 @@ func _create_lighting() -> void:
 			env.ambient_light_color = Color(0.35, 0.30, 0.25); env.ambient_light_energy = 1.0
 	add_child(dir_light)
 	world_env.environment = env; add_child(world_env)
-
-# ── Late-join: existing peers spawn one new player ────────────────────────────
-func _on_player_joined_mid_game(pid: int, idx: int) -> void:
-	if game_manager == null or not is_instance_valid(game_manager): return
-	if _players.has(pid): return   # already spawned (shouldn't happen)
-
-	game_manager.register_player(pid)
-
-	var p = Player.new()
-	p.name         = "Player_%d" % idx
-	p.peer_id      = pid
-	p.player_index = idx
-	p.set_multiplayer_authority(pid)
-	p.game_manager = game_manager
-	add_child(p)
-	p.trap_manager  = trap_manager
-	p.sound_manager = sound_manager
-	_players[pid] = p
 
 # ── Peer disconnect ───────────────────────────────────────────────────────────
 func _on_peer_left(pid: int) -> void:

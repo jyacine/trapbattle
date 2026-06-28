@@ -5,7 +5,7 @@ signal lobby_ready(seed_val: int, map_id: int)
 signal lobby_updated(peer_ids: Array)
 signal connected
 signal peer_left(pid: int)            # pid = -1 means the whole server is gone
-signal player_joined_mid_game(pid: int, player_index: int)  # late joiner during live game
+signal game_in_progress               # fired on the client when the server is mid-game
 
 const PORT := 9999
 
@@ -56,9 +56,7 @@ func host_game() -> void:
 func _on_host_peer_connected(id: int) -> void:
 	_peers.append(id)
 	if game_started:
-		# Game already running — skip lobby handshake entirely.
-		# Slot assignment + late-join RPC are sent in _rpc_join_info once the
-		# peer sends their name/color.
+		# Game already running — peer will be rejected once they send _rpc_join_info.
 		return
 	assignments[id] = _peers.size() - 1
 	# Broadcast current names/colors; the new peer will call _rpc_join_info shortly
@@ -128,17 +126,12 @@ func _rpc_join_info(name: String, color_idx: int) -> void:
 	player_color_indices[sender] = color_idx
 
 	if game_started:
-		# Give the late joiner the next free player-index slot
-		var max_idx = -1
-		for idx in assignments.values():
-			if idx > max_idx: max_idx = idx
-		var new_idx = max_idx + 1
-		assignments[sender] = new_idx
-
-		# Tell the newcomer to start the game immediately with current assignments
-		_rpc_late_join.rpc_id(sender, _game_seed, assignments, _game_map)
-		# Tell every peer (including the host itself) to spawn the new player
-		_rpc_spawn_late_peer.rpc(sender, new_idx)
+		# Reject the newcomer — game is already in progress.
+		# Their client shows a message then disconnects gracefully.
+		_rpc_game_in_progress.rpc_id(sender)
+		get_tree().create_timer(1.5).timeout.connect(func():
+			if multiplayer.is_server() and multiplayer.has_multiplayer_peer():
+				multiplayer.multiplayer_peer.disconnect_peer(sender))
 	else:
 		_rpc_lobby_update.rpc(Array(_peers), player_names, player_color_indices)
 		lobby_updated.emit(Array(_peers))
@@ -176,23 +169,10 @@ func _on_conn_fail() -> void:
 func _on_server_left() -> void:
 	peer_left.emit(-1)   # -1 = host gone, caller should reload/quit
 
-# ── Late-join RPCs ───────────────────────────────────────────────────────────
-
-## Server → newcomer only: skip lobby, start game immediately.
+## Server → newcomer: the game is already running, cannot join mid-match.
 @rpc("authority", "call_remote", "reliable")
-func _rpc_late_join(seed_val: int, asns: Dictionary, map_id: int) -> void:
-	assignments = asns
-	_game_map   = map_id
-	is_captain  = false
-	lobby_ready.emit(seed_val, map_id)
-
-## Server → all peers (call_local so host also runs it):
-## spawn one new player node for the peer that just joined mid-game.
-@rpc("authority", "call_local", "reliable")
-func _rpc_spawn_late_peer(pid: int, player_index: int) -> void:
-	# The late joiner handles their own spawn via lobby_ready / _spawn_mp_players
-	if pid == multiplayer.get_unique_id(): return
-	player_joined_mid_game.emit(pid, player_index)
+func _rpc_game_in_progress() -> void:
+	game_in_progress.emit()
 
 # ── Ping / pong ───────────────────────────────────────────────────────────────
 # Client sends timestamp → server echoes it → client measures round-trip.
