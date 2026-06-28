@@ -133,8 +133,8 @@ func _build_menu() -> void:
 	_menu_nodes.append(btn_sp)
 
 	_ip_field = LineEdit.new()
-	_ip_field.placeholder_text = "Server host  (e.g. 172-174-208-254.nip.io)"
-	_ip_field.text = "172-174-208-254.nip.io"
+	_ip_field.placeholder_text = "Server host  (e.g. 34-155-15-247.nip.io)"
+	_ip_field.text = "34-155-15-247.nip.io"
 	_ip_field.add_theme_font_size_override("font_size", 18)
 	_ip_field.anchor_left = 0.5;  _ip_field.anchor_right  = 0.5
 	_ip_field.anchor_top  = 0.5;  _ip_field.anchor_bottom = 0.5

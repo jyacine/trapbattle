@@ -83,13 +83,13 @@ After pushing, make sure the itch.io embed has:
 Open `project.godot` in the Godot editor and press **F5** (or Run).
 
 To test multiplayer locally, you need the dedicated server running — see [trapbattle-server](../trapbattle-server/README.md).  
-The default lobby host is `172-174-208-254.nip.io` (the live Azure VM). Change it in `scripts/config.gd` or type a different address in the lobby UI.
+The default lobby host is `34-155-15-247.nip.io` (the live GCP VM). Change it in `scripts/lobby_ui.gd` or type a different address in the lobby UI.
 
 ---
 
 ## Networking
 
-- Connects via `wss://172-174-208-254.nip.io` (port 443, TLS terminated by Caddy on the VM).
+- Connects via `wss://34-155-15-247.nip.io` (port 443, TLS terminated by Caddy on the VM).
 - Uses Godot High-Level Multiplayer API over WebSocketMultiplayerPeer.
 - RPCs are routed by alphabetical index — client and server must declare **identical `@rpc` method sets** on each shared node or calls will be silently misrouted.
 
@@ -132,7 +132,7 @@ Output goes to `test_report/<timestamp>/` (git-ignored):
 | Python | 3.10+ |
 | NumPy / SciPy | `pip install -r tests/requirements.txt` |
 | Godot | `C:\Users\XDGT0500\Downloads\Godot_v4.6.3-stable_win64.exe` |
-| Server | Live VM at `172.174.208.254` must be running; **no other players connected** |
+| Server | Live VM at `34.155.15.247` must be running; **no other players connected** |
 
 Optional: `pip install pesq` for an ITU-T P.862 PESQ MOS score.
 
@@ -187,7 +187,7 @@ Player 2 receives → decodes ADPCM → saves 24 kHz mono WAV
 Python measures SNR / correlation / PESQ and writes report.md
 ```
 
-Both headless processes connect via `wss://172-174-208-254.nip.io` with default TLS
+Both headless processes connect via `wss://34-155-15-247.nip.io` with default TLS
 (the nip.io host has a valid Let's Encrypt cert provisioned by Caddy) — exactly the
 same URL and TLS path the real game client uses. A bare-IP URL or `client_unsafe()`
 fails the handshake because Caddy needs SNI to select the cert.
