@@ -98,7 +98,7 @@ var _enc_index:     int = 0
 
 # Opus codec via browser WebCodecs API (web-only). When true, all voice traffic
 # uses Opus-encoded packets (VOICE_FMT_OPUS) instead of raw PCM16.
-var _opus_web: bool = true
+var _opus_web: bool = false
 
 # Capture-rate: use AudioServer.get_mix_rate() — the authoritative browser audio rate.
 # We previously tried frame-count calibration but AudioEffectCapture.get_frames_available()
@@ -383,7 +383,9 @@ func _capture_and_send() -> void:
 # Poll the JS Opus encoder queue and send any completed packets over the active channel.
 # Called every _process tick so the async output doesn't wait for the next VAD interval.
 func _poll_opus_encoded() -> void:
-	var raw: String = JavaScriptBridge.eval("(function(){var c=window.TBVoice.pollEnc(),r=[];for(var i=0;i<c.length;i++){r.push(c[i]);}return JSON.stringify(r);})()")
+	var raw = JavaScriptBridge.eval("(function(){var c=window.TBVoice.pollEnc(),r=[];for(var i=0;i<c.length;i++){r.push(c[i]);}return JSON.stringify(r);})()")
+	if not raw is String:
+		return
 	var chunks = JSON.parse_string(raw)
 	if not chunks is Array or chunks.is_empty():
 		return
@@ -407,7 +409,9 @@ func _poll_opus_encoded() -> void:
 # their jitter buffers. Called every _process tick so decoded audio is never stale.
 func _poll_opus_decoded() -> void:
 	for pid in _speakers.keys():
-		var raw: String = JavaScriptBridge.eval("JSON.stringify(window.TBVoice.pollDec(%d))" % pid)
+		var raw = JavaScriptBridge.eval("JSON.stringify(window.TBVoice.pollDec(%d))" % pid)
+		if not raw is String:
+			continue
 		var frames = JSON.parse_string(raw)
 		if not frames is Array:
 			continue
