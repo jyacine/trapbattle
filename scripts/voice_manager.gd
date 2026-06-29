@@ -598,20 +598,18 @@ func _rpc_play_voice(audio_bytes: PackedByteArray, sender_id: int) -> void:
 # existing reliable RPC channel. The channel is "negotiated" (both sides create it
 # with the same id) so it needs no in-band SDP renegotiation.
 func _setup_webrtc() -> void:
-	# On web builds the browser supplies a real WebRTC implementation. On native
-	# builds the webrtc-native GDExtension is required; without it the class is
-	# a stub named "WebRTCPeerConnectionExtension" that crashes on initialize().
-	var probe: WebRTCPeerConnection = WebRTCPeerConnection.new()
-	var is_stub: bool = probe.get_class() == "WebRTCPeerConnectionExtension"
-	probe.free()
-	if is_stub:
-		push_warning("[voice] webrtc-native not installed — using WebSocket relay")
+	# Native builds need the webrtc-native GDExtension; without it
+	# WebRTCPeerConnection.new() returns a non-functional object whose initialize()
+	# fails. On web the browser supplies WebRTC. Either way: if we can't create +
+	# initialize a peer connection, fall back to the WebSocket relay.
+	# Do NOT probe-then-free: WebRTCPeerConnection is RefCounted and .free() on it
+	# raises "Attempted to free a RefCounted object", which breaks the editor
+	# debugger the moment a game is joined.
+	var rtc := WebRTCPeerConnection.new()
+	if rtc == null or rtc.initialize({ "iceServers": [ { "urls": [RTC_STUN] } ] }) != OK:
+		push_warning("[voice] WebRTC unavailable — using WebSocket relay")
 		return
-	_rtc = WebRTCPeerConnection.new()
-	if _rtc.initialize({ "iceServers": [ { "urls": [RTC_STUN] } ] }) != OK:
-		push_warning("[voice] WebRTC init failed — using WebSocket relay")
-		_rtc = null
-		return
+	_rtc = rtc
 	_rtc.session_description_created.connect(_on_rtc_sdp)
 	_rtc.ice_candidate_created.connect(_on_rtc_ice)
 	_vch = _rtc.create_data_channel("voice",
