@@ -127,6 +127,12 @@ var _fwd_was_active:   bool  = false  # forward was active last frame (for edge 
 # ── Multiplayer ───────────────────────────────────────────────────────────────
 var is_local: bool = true
 
+# Interpolation targets — remote players lerp toward these each physics frame
+# instead of snapping to the received position.  Avoids the teleporting/jitter
+# caused by WebSocket relay latency (~25-75 ms one-way on the live server).
+var _net_pos_target: Vector3 = Vector3.ZERO
+var _net_yaw_target: float   = 0.0
+
 # True on phones/tablets — pointer input is owned by UIManager's on-screen pads,
 # so we ignore (emulated) mouse events here to avoid double-turning the camera.
 var _is_touch: bool = false
@@ -247,6 +253,8 @@ func _ready() -> void:
 	else:
 		_build_remote_body()
 		_teleport_to(spawn_cell)
+		_net_pos_target = position
+		_net_yaw_target = yaw
 
 # ────────────────────────────────────────────────────────────────────────────
 func _physics_process(delta: float) -> void:
@@ -257,6 +265,16 @@ func _physics_process(delta: float) -> void:
 
 	if not is_local:
 		_update_hp3_bar()
+		# Smooth the remote player toward the last received network position.
+		# Distances > 2 m are respawns/teleports — snap so we don't glide across the map.
+		var dist := (_net_pos_target - position).length()
+		if dist > 2.0:
+			position = _net_pos_target
+			reset_physics_interpolation()
+		else:
+			position = position.lerp(_net_pos_target, minf(delta * 15.0, 1.0))
+		yaw = lerp_angle(yaw, _net_yaw_target, minf(delta * 12.0, 1.0))
+		rotation.y = yaw
 		return
 
 	_pickup_cooldown = max(0.0, _pickup_cooldown - delta)
@@ -320,7 +338,7 @@ func _physics_process(delta: float) -> void:
 		current_grid_pos = game_manager.world_to_grid(position)
 		_update_viewmodel(delta)
 		if multiplayer.has_multiplayer_peer():
-			_net_pos.rpc(position, yaw)
+			_net_pos.rpc(position, yaw, pitch)
 		return
 
 	var is_confused = game_manager.has_effect(peer_id, "confusion")
@@ -424,7 +442,7 @@ func _physics_process(delta: float) -> void:
 			_update_trap_aim()
 
 	if multiplayer.has_multiplayer_peer():
-		_net_pos.rpc(position, yaw)
+		_net_pos.rpc(position, yaw, pitch)
 		if gun_type != _last_synced_gun_type:
 			_last_synced_gun_type = gun_type
 			_net_gun_type.rpc(gun_type)
@@ -776,12 +794,12 @@ func _try_pickup() -> void:
 
 # ── Multiplayer position sync ─────────────────────────────────────────────────
 @rpc("authority", "unreliable")
-func _net_pos(pos: Vector3, y: float) -> void:
+func _net_pos(pos: Vector3, y: float, p: float = 0.0) -> void:
 	if is_multiplayer_authority(): return
-	position         = pos
-	yaw              = y
-	rotation.y       = yaw
-	current_grid_pos = game_manager.world_to_grid(pos)   # keep grid pos in sync
+	_net_pos_target  = pos
+	_net_yaw_target  = y
+	pitch            = p                                  # used in death-replay opponent view
+	current_grid_pos = game_manager.world_to_grid(pos)   # authoritative grid cell (not interpolated)
 
 # Syncs which gun type (if any) the local player is currently holding.
 # Received by all remote peers so they can show/hide the gun on the remote body.
