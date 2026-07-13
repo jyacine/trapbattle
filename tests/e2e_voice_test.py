@@ -13,7 +13,7 @@ Usage:
 Prerequisites:
     pip install -r tests/requirements.txt
 
-    The dedicated server must be running at 34.155.15.247 (port 443/WSS).
+    The dedicated server must be running at 34.155.132.207 (port 443/WSS).
     No other player should be connected to the server during the test.
 
 Outputs (test_report/<timestamp>/):
@@ -277,7 +277,7 @@ def generate_report(report_dir: str, timestamp: str,
         "# TrapBattle Voice E2E Test Report",
         "",
         f"**Generated:** {timestamp}  ",
-        f"**Server:** `wss://34-155-15-247.nip.io`  ",
+        f"**Server:** `wss://34-155-132-207.nip.io`  ",
         f"**Mode:** Bidirectional (P1 ⇄ P2)  ",
         f"**Result:** {verdict}",
         "", "---", "",

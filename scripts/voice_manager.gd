@@ -719,10 +719,11 @@ func _push_to_speaker(sender_id: int, bytes: PackedByteArray) -> void:
 		var gen    = AudioStreamGenerator.new()
 		gen.mix_rate      = VOICE_RATE
 		gen.buffer_length = GEN_BUFFER_LEN
-		var player = AudioStreamPlayer.new()
-		player.stream    = gen
-		player.volume_db = 0.0
-		player.autoplay  = true
+		var player = AudioStreamPlayer3D.new()
+		player.stream       = gen
+		player.autoplay     = true
+		player.max_distance = 40.0  # maze is 27×27 cells × 2 u/cell = 54 u wide
+		player.unit_size    = 3.0   # full volume at 3 m, inverse-distance falloff
 		add_child(player)
 		_speaker_nodes[sender_id] = player
 		_speakers[sender_id]      = player.get_stream_playback() as AudioStreamGeneratorPlayback
@@ -807,6 +808,14 @@ func _pump_speakers() -> void:
 		if pos > prebuf * 2:
 			_jq[pid] = q.slice(pos)
 			_jq_pos[pid] = 0
+
+# ── Spatial audio positioning ─────────────────────────────────────────────────
+# Called by main.gd each frame with the remote peer's world position so the
+# AudioStreamPlayer3D node tracks them through the maze.
+func set_speaker_position(pid: int, pos: Vector3) -> void:
+	var node = _speaker_nodes.get(pid)
+	if node != null and is_instance_valid(node):
+		node.global_position = pos
 
 # ── Cleanup ───────────────────────────────────────────────────────────────────
 func remove_speaker(pid: int) -> void:

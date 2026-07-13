@@ -5,7 +5,7 @@ extends SceneTree
 ## Both peers send their input WAV as ADPCM while simultaneously recording
 ## all incoming voice from the partner. On silence, writes output WAV and exits.
 
-const SERVER_HOST        := "34-155-15-247.nip.io"
+const SERVER_HOST        := "34-155-132-207.nip.io"
 const CONNECT_TIMEOUT    := 20.0
 const LOBBY_TIMEOUT      := 30.0
 const GAME_START_TIMEOUT := 30.0

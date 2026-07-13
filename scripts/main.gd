@@ -757,6 +757,20 @@ func _on_peer_left(pid: int) -> void:
 	if game_manager and is_instance_valid(game_manager):
 		game_manager.check_win_condition()
 
+# ── Per-frame: keep voice speaker nodes at each remote player's world position ──
+func _process(_delta: float) -> void:
+	if voice_manager == null or not is_instance_valid(voice_manager):
+		return
+	if not multiplayer.has_multiplayer_peer():
+		return
+	var my_id := multiplayer.get_unique_id()
+	for pid in _players:
+		if pid == my_id:
+			continue
+		var p = _players[pid]
+		if is_instance_valid(p):
+			voice_manager.set_speaker_position(pid, p.global_position)
+
 # ── UI ────────────────────────────────────────────────────────────────────────
 func _create_ui() -> void:
 	var ui = UIManager.new()

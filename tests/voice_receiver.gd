@@ -1,6 +1,6 @@
 extends SceneTree
 
-const SERVER_HOST := "34-155-15-247.nip.io"
+const SERVER_HOST := "34-155-132-207.nip.io"
 const CONNECT_TIMEOUT := 20.0
 const LOBBY_TIMEOUT := 30.0
 const GAME_START_TIMEOUT := 30.0

@@ -58,7 +58,7 @@ MD_REPORT = REPORT_DIR / "voice_quality_report.md"
 GODOT_BIN = os.environ.get("GODOT_BIN", r"godot")
 CLIENT_SCENE = ROOT / "scenes" / "Main.tscn"
 
-SERVER_HOST = os.environ.get("TB_SERVER_HOST", "34-155-15-247.nip.io")
+SERVER_HOST = os.environ.get("TB_SERVER_HOST", "34-155-132-207.nip.io")
 PLAYER1_NAME = "E2E_Player1"
 PLAYER2_NAME = "E2E_Player2"
 TEST_DURATION_SEC = 10.0
