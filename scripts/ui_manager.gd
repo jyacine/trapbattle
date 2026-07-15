@@ -45,9 +45,12 @@ var _voice_icon:    TextureRect = null  # mic / mute icon shown on the button
 # ── Minimap ───────────────────────────────────────────────────────────────────
 var _mm_rect:    TextureRect
 var _mm_image:   Image
+var _mm_base:    Image          # static maze painted once — blitted each refresh
 var _mm_texture: ImageTexture
+var _mm_timer:   float = 0.0
 const MM_CELL   = 4
 const MM_MARGIN = 8
+const MM_REFRESH := 0.1   # minimap redraw period (10 Hz — full-rate repaint tanked web FPS)
 
 # ── Exit / leave-match ─────────────────────────────────────────────────────────
 var _exit_btn:     Button
@@ -98,6 +101,7 @@ var _jump_id:       int   = -1
 var _crosshair_parts: Array = []
 
 # ── Gun icons (index matches Config.GunType) ──────────────────────────────────
+var _gun_icon_cache: Dictionary = {}   # gtype → Texture2D (load() per frame is slow on web)
 const GUN_ICONS: Array = [
 	"res://assets/icons/icon_gun.svg",
 	"res://assets/icons/icon_shotgun.svg",
@@ -160,11 +164,14 @@ func _ready() -> void:
 		vm.player_speaking_changed.connect(_on_player_speaking_changed)
 
 # ────────────────────────────────────────────────────────────────────────────
-func _process(_delta: float) -> void:
+func _process(delta: float) -> void:
 	if player == null: return
 	_update_hud()
 	_update_player_hud()
-	_update_minimap()
+	_mm_timer -= delta
+	if _mm_timer <= 0.0:
+		_mm_timer = MM_REFRESH
+		_update_minimap()
 	_update_crosshair()
 	# Keep the joystick knob parked at the ring centre while idle (also handles resize).
 	if _joy_base_nd != null and _joy_id == -1:
@@ -535,6 +542,17 @@ func _build_minimap() -> void:
 	var grid = game_manager.grid
 	var w    = grid[0].size() * MM_CELL
 	var h    = grid.size()    * MM_CELL
+	# Paint the static maze ONCE into a base image; per-refresh we only blit it
+	# and stamp the dynamic markers on top (repainting every cell every frame in
+	# GDScript was a major cost on the single-threaded web export).
+	_mm_base = Image.create(w, h, false, Image.FORMAT_RGB8)
+	for r in range(grid.size()):
+		for c in range(grid[r].size()):
+			var col = Color(0.65, 0.65, 0.65) if grid[r][c] == 0 else Color(0.1, 0.1, 0.1)
+			for dy in range(MM_CELL):
+				for dx in range(MM_CELL):
+					var px = c * MM_CELL + dx; var py = r * MM_CELL + dy
+					if px < w and py < h: _mm_base.set_pixel(px, py, col)
 	_mm_image   = Image.create(w, h, false, Image.FORMAT_RGB8)
 	_mm_texture = ImageTexture.create_from_image(_mm_image)
 	_mm_rect          = TextureRect.new()
@@ -545,17 +563,11 @@ func _build_minimap() -> void:
 
 func _update_minimap() -> void:
 	if _mm_image == null: return
-	var grid = game_manager.grid
 	var w    = _mm_image.get_width()
 	var h    = _mm_image.get_height()
 
-	for r in range(grid.size()):
-		for c in range(grid[r].size()):
-			var col = Color(0.65, 0.65, 0.65) if grid[r][c] == 0 else Color(0.1, 0.1, 0.1)
-			for dy in range(MM_CELL):
-				for dx in range(MM_CELL):
-					var px = c * MM_CELL + dx; var py = r * MM_CELL + dy
-					if px < w and py < h: _mm_image.set_pixel(px, py, col)
+	# Restore the pre-painted static maze in one blit, then draw dynamic markers.
+	_mm_image.blit_rect(_mm_base, Rect2i(0, 0, w, h), Vector2i.ZERO)
 
 	# Other players first, then the local player on top.
 	for opp in get_tree().get_nodes_in_group("players"):
@@ -572,8 +584,9 @@ func _update_minimap() -> void:
 		var bg = game_manager.world_to_grid(box.position)
 		_mm_dot(bg[0], bg[1], Color.YELLOW, 2)
 
-	_mm_texture = ImageTexture.create_from_image(_mm_image)
-	_mm_rect.texture = _mm_texture
+	# update() re-uses the existing GPU texture (same size/format) — creating a new
+	# ImageTexture every refresh reallocated + reuploaded a texture per frame.
+	_mm_texture.update(_mm_image)
 
 func _mm_dot(gx: int, gy: int, col: Color, radius: int) -> void:
 	var w = _mm_image.get_width(); var h = _mm_image.get_height()
@@ -1056,7 +1069,9 @@ func _update_inventory_bar() -> void:
 		var htrap: int = player.held_trap
 		# Gun side (right half)
 		if gtype >= 0 and gtype < GUN_ICONS.size():
-			_active_icon.texture = load(GUN_ICONS[gtype])
+			if not _gun_icon_cache.has(gtype):
+				_gun_icon_cache[gtype] = load(GUN_ICONS[gtype])
+			_active_icon.texture = _gun_icon_cache[gtype]
 			_active_icon.visible = true
 		else:
 			_active_icon.texture = null

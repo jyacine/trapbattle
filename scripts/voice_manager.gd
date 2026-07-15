@@ -722,8 +722,15 @@ func _push_to_speaker(sender_id: int, bytes: PackedByteArray) -> void:
 		var player = AudioStreamPlayer3D.new()
 		player.stream       = gen
 		player.autoplay     = true
-		player.max_distance = 40.0  # maze is 27×27 cells × 2 u/cell = 54 u wide
-		player.unit_size    = 3.0   # full volume at 3 m, inverse-distance falloff
+		# Spatial voice, tuned so it can never be inaudible:
+		#  - max_distance = 0  → no hard cutoff (unit_size=3/max=40 made distant
+		#    teammates silent in the 54-unit maze — reported as "voice broken")
+		#  - unit_size = 12    → gentle inverse-distance falloff, still directional
+		#  - filter cutoff 20.5 kHz → disable the default distance low-pass
+		#    (5 kHz default muffles speech badly)
+		player.max_distance = 0.0
+		player.unit_size    = 12.0
+		player.attenuation_filter_cutoff_hz = 20500
 		add_child(player)
 		_speaker_nodes[sender_id] = player
 		_speakers[sender_id]      = player.get_stream_playback() as AudioStreamGeneratorPlayback

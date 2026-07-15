@@ -133,11 +133,26 @@ var is_local: bool = true
 var _net_pos_target: Vector3 = Vector3.ZERO
 var _net_yaw_target: float   = 0.0
 
+# Position-sync throttle. Broadcasting _net_pos EVERY physics frame (60 Hz) even
+# while standing still flooded the WSS TCP link: the server relays each packet to
+# N-1 peers, so every client also had to process (N-1)×60 RPCs/s on the main
+# thread — a big cost on the single-threaded web export, and it starved the
+# WebSocket voice fallback (choppy voice). 20 Hz + only-when-moved is plenty;
+# remote peers already interpolate between updates.
+const NET_SYNC_INTERVAL := 0.05   # 20 Hz while moving
+const NET_KEEPALIVE     := 0.5    # idle: still send ~2 Hz so late joiners sync
+var _net_sync_timer: float = 0.0
+var _net_sent_pos:   Vector3 = Vector3.ZERO
+var _net_sent_yaw:   float   = 0.0
+var _net_sent_pitch: float   = 0.0
+
 # True on phones/tablets — pointer input is owned by UIManager's on-screen pads,
 # so we ignore (emulated) mouse events here to avoid double-turning the camera.
 var _is_touch: bool = false
 
 # Remote-body HP bar (only built when is_local == false)
+var _hp3_last_hp:      int  = -1      # change guard — see _update_hp3_bar
+var _hp3_last_dead:    bool = false
 var _hp3_fill_mi:      MeshInstance3D = null
 var _hp3_fill_q:       QuadMesh       = null
 var _hp3_label:        Label3D        = null
@@ -337,8 +352,7 @@ func _physics_process(delta: float) -> void:
 			position.y = _respawn_y_to
 		current_grid_pos = game_manager.world_to_grid(position)
 		_update_viewmodel(delta)
-		if multiplayer.has_multiplayer_peer():
-			_net_pos.rpc(position, yaw, pitch)
+		_net_sync(delta)
 		return
 
 	var is_confused = game_manager.has_effect(peer_id, "confusion")
@@ -441,11 +455,29 @@ func _physics_process(delta: float) -> void:
 		else:
 			_update_trap_aim()
 
-	if multiplayer.has_multiplayer_peer():
-		_net_pos.rpc(position, yaw, pitch)
-		if gun_type != _last_synced_gun_type:
-			_last_synced_gun_type = gun_type
-			_net_gun_type.rpc(gun_type)
+	_net_sync(delta)
+	if multiplayer.has_multiplayer_peer() and gun_type != _last_synced_gun_type:
+		_last_synced_gun_type = gun_type
+		_net_gun_type.rpc(gun_type)
+
+# Throttled position broadcast: 20 Hz while moving/turning, ~2 Hz keepalive while
+# idle. See NET_SYNC_INTERVAL comment for why full-rate sync was harmful.
+func _net_sync(delta: float) -> void:
+	if not multiplayer.has_multiplayer_peer():
+		return
+	_net_sync_timer -= delta
+	if _net_sync_timer > 0.0:
+		return
+	var moved: bool = (position - _net_sent_pos).length_squared() > 0.000025 \
+		or absf(wrapf(yaw - _net_sent_yaw, -PI, PI)) > 0.0015 \
+		or absf(pitch - _net_sent_pitch) > 0.0015
+	if not moved and _net_sync_timer > -NET_KEEPALIVE:
+		return   # idle — wait for the keepalive deadline
+	_net_sync_timer = NET_SYNC_INTERVAL
+	_net_sent_pos   = position
+	_net_sent_yaw   = yaw
+	_net_sent_pitch = pitch
+	_net_pos.rpc(position, yaw, pitch)
 
 # Pure look-smoothing math (static so it can be unit-tested headless without a
 # full Player node — see tests/test_look_smoothing.gd). Returns how much to add
@@ -891,6 +923,13 @@ func _build_hp3_bar() -> void:
 func _update_hp3_bar() -> void:
 	if _hp3_fill_mi == null: return
 	var is_dead: bool = game_manager.respawning.get(peer_id, false)
+	var h_now: int = game_manager.hp.get(peer_id, Config.MAX_HP)
+	# Early-out when nothing changed: resizing the QuadMesh regenerates mesh data,
+	# so doing it every physics frame per remote player was wasted CPU on web.
+	if h_now == _hp3_last_hp and is_dead == _hp3_last_dead:
+		return
+	_hp3_last_hp   = h_now
+	_hp3_last_dead = is_dead
 	if _remote_body_root:
 		_remote_body_root.visible = not is_dead
 	var h     = game_manager.hp.get(peer_id, Config.MAX_HP)
