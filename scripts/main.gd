@@ -17,6 +17,7 @@ func _ready() -> void:
 	network_manager.name = "NetworkManager"
 	add_child(network_manager)
 	network_manager.peer_left.connect(_on_peer_left)
+	network_manager.late_peer_joined.connect(_on_late_peer_joined)
 
 	var lobby = LobbyUI.new()
 	lobby.name = "LobbyUI"
@@ -725,6 +726,25 @@ func _create_lighting() -> void:
 	world_env.environment = env; add_child(world_env)
 
 # ── Peer disconnect ───────────────────────────────────────────────────────────
+# A newcomer joined the match we're already playing: spawn their player node,
+# mirroring one iteration of _spawn_mp_players. Their live position arrives via
+# their _net_pos broadcasts (>2 m from spawn snaps instantly, no glide).
+func _on_late_peer_joined(pid: int, idx: int, _name: String) -> void:
+	if game_manager == null or not is_instance_valid(game_manager):
+		return   # not in a game (still in lobby) — nothing to spawn
+	if _players.has(pid):
+		return
+	game_manager.register_player(pid)
+	var p = Player.new()
+	p.name          = "Player_%d" % idx
+	p.peer_id       = pid
+	p.player_index  = idx
+	p.trap_manager  = trap_manager
+	p.sound_manager = sound_manager
+	p.set_multiplayer_authority(pid)
+	add_child(p)
+	_players[pid] = p
+
 func _on_peer_left(pid: int) -> void:
 	if pid == -1:
 		# Host disconnected — reload to main menu

@@ -521,7 +521,7 @@ func _on_game_in_progress() -> void:
 	add_child(bg)
 
 	var msg = Label.new()
-	msg.text = "Game already in progress\nPlease wait for the current match to end, then reconnect."
+	msg.text = "Match is full\nPlease wait for a player slot to free up, then reconnect."
 	msg.add_theme_font_size_override("font_size", 26)
 	msg.add_theme_color_override("font_color", Color(1.0, 0.75, 0.2))
 	msg.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER

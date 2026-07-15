@@ -5,7 +5,8 @@ signal lobby_ready(seed_val: int, map_id: int)
 signal lobby_updated(peer_ids: Array)
 signal connected
 signal peer_left(pid: int)            # pid = -1 means the whole server is gone
-signal game_in_progress               # fired on the client when the server is mid-game
+signal game_in_progress               # fired on the client when the match is FULL (rejected)
+signal late_peer_joined(pid: int, idx: int, name: String)  # main.gd spawns them mid-game
 
 const PORT := 9999
 
@@ -126,12 +127,29 @@ func _rpc_join_info(name: String, color_idx: int) -> void:
 	player_color_indices[sender] = color_idx
 
 	if game_started:
-		# Reject the newcomer — game is already in progress.
-		# Their client shows a message then disconnects gracefully.
-		_rpc_game_in_progress.rpc_id(sender)
-		get_tree().create_timer(1.5).timeout.connect(func():
-			if multiplayer.is_server() and multiplayer.has_multiplayer_peer():
-				multiplayer.multiplayer_peer.disconnect_peer(sender))
+		# Match already running (listen-server host): late-join the newcomer into
+		# the lowest free slot, or reject if every slot is taken.
+		var used: Dictionary = {}
+		for p in assignments:
+			used[assignments[p]] = true
+		var idx: int = 0
+		while used.has(idx):
+			idx += 1
+		if idx >= Config.MAX_PLAYERS:
+			_rpc_game_in_progress.rpc_id(sender)
+			get_tree().create_timer(1.5).timeout.connect(func():
+				if multiplayer.is_server() and multiplayer.has_multiplayer_peer():
+					multiplayer.multiplayer_peer.disconnect_peer(sender))
+			return
+		assignments[sender] = idx
+		if not _peers.has(sender):
+			_peers.append(sender)
+		_rpc_late_join.rpc_id(sender, _game_seed, assignments, _game_map,
+			player_names, player_color_indices)
+		for other in _peers:
+			if other != sender and other != 1:
+				_rpc_spawn_late_peer.rpc_id(other, sender, idx, name)
+		late_peer_joined.emit(sender, idx, name)   # spawn on the host itself
 	else:
 		_rpc_lobby_update.rpc(Array(_peers), player_names, player_color_indices)
 		lobby_updated.emit(Array(_peers))
@@ -169,10 +187,42 @@ func _on_conn_fail() -> void:
 func _on_server_left() -> void:
 	peer_left.emit(-1)   # -1 = host gone, caller should reload/quit
 
-## Server → newcomer: the game is already running, cannot join mid-match.
+## Server → newcomer: the match is full, cannot join.
 @rpc("authority", "call_remote", "reliable")
 func _rpc_game_in_progress() -> void:
 	game_in_progress.emit()
+
+# ── Late-join RPCs ────────────────────────────────────────────────────────────
+# Both must exist with IDENTICAL decorators in the server repo's NetworkManager
+# (as stubs there) — Godot 4 routes RPCs by index in the alphabetically-sorted
+# @rpc method list, so the sets must match or calls get silently misrouted.
+
+## Server → this (late-joining) client: reconstruct the running match locally.
+## Same seed → identical maze; assignments contain every player incl. ourselves.
+## Alphabetically between _rpc_join_info and _rpc_lobby_update.
+@rpc("authority", "call_remote", "reliable")
+func _rpc_late_join(seed_val: int, asns: Dictionary, map_id: int, names: Dictionary, color_idxs: Dictionary) -> void:
+	assignments          = asns
+	player_names         = names
+	player_color_indices = color_idxs
+	game_started = true
+	_game_seed   = seed_val
+	_game_map    = map_id
+	is_captain   = false
+	# Fires the exact same path as a normal game start: LobbyUI._on_lobby_ready
+	# → start_game → main.gd builds the maze from the seed and spawns every
+	# player in `assignments` (including us).
+	lobby_ready.emit(seed_val, map_id)
+
+## Server → clients already in the match: a newcomer joined; spawn their node.
+## Alphabetically between _rpc_request_start and _rpc_start_game.
+@rpc("authority", "call_remote", "reliable")
+func _rpc_spawn_late_peer(pid: int, idx: int, name: String) -> void:
+	assignments[pid]  = idx
+	player_names[pid] = name
+	if not _peers.has(pid):
+		_peers.append(pid)
+	late_peer_joined.emit(pid, idx, name)
 
 # ── Ping / pong ───────────────────────────────────────────────────────────────
 # Client sends timestamp → server echoes it → client measures round-trip.
