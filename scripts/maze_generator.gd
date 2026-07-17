@@ -38,6 +38,8 @@ static func _carve(grid: Array, rows: int, cols: int, start_r: int, start_c: int
 			var nc = cc + dc
 
 			if nr > 0 and nr < rows - 1 and nc > 0 and nc < cols - 1 and grid[nr][nc] == 1:
+				# dr/dc are ±2 or 0 — integer halving is exact and intentional.
+				@warning_ignore("integer_division")
 				grid[cr + dr/2][cc + dc/2] = 0
 				grid[nr][nc] = 0
 				stack.append([nr, nc])
@@ -66,7 +68,10 @@ static func pick_spawns(grid: Array, count: int = 2) -> Dictionary:
 	var cols   = grid[0].size()
 	var floors = _get_floor_cells(grid)
 
-	# Up to 10 well-spread target positions across the maze
+	# Up to 10 well-spread target positions across the maze.
+	# Integer division is intentional: these are grid cell indices, and the same
+	# truncation must happen on client and server for identical spawn points.
+	@warning_ignore("integer_division")
 	var targets: Array = [
 		[cols / 6,       rows / 6      ],   # top-left
 		[cols * 5 / 6,   rows * 5 / 6  ],   # bottom-right

@@ -448,10 +448,10 @@ func _build_crosshair() -> void:
 
 	const GAP := 5; const LEN := 11; const TICK := 2
 	var rects: Array[Dictionary] = [
-		{ "pos": Vector2(-(GAP + LEN), -TICK / 2), "size": Vector2(LEN, TICK) },
-		{ "pos": Vector2(GAP,          -TICK / 2), "size": Vector2(LEN, TICK) },
-		{ "pos": Vector2(-TICK / 2, -(GAP + LEN)), "size": Vector2(TICK, LEN) },
-		{ "pos": Vector2(-TICK / 2,  GAP),         "size": Vector2(TICK, LEN) },
+		{ "pos": Vector2(-(GAP + LEN), -TICK / 2.0), "size": Vector2(LEN, TICK) },
+		{ "pos": Vector2(GAP,          -TICK / 2.0), "size": Vector2(LEN, TICK) },
+		{ "pos": Vector2(-TICK / 2.0, -(GAP + LEN)), "size": Vector2(TICK, LEN) },
+		{ "pos": Vector2(-TICK / 2.0,  GAP),         "size": Vector2(TICK, LEN) },
 		{ "pos": Vector2(-2, -2),                  "size": Vector2(4, 4) },
 	]
 	for r in rects:
@@ -590,10 +590,11 @@ func _update_minimap() -> void:
 
 func _mm_dot(gx: int, gy: int, col: Color, radius: int) -> void:
 	var w = _mm_image.get_width(); var h = _mm_image.get_height()
+	@warning_ignore("integer_division") var half: int = MM_CELL / 2
 	for dy in range(-radius, radius + 1):
 		for dx in range(-radius, radius + 1):
-			var px = gx * MM_CELL + MM_CELL / 2 + dx
-			var py = gy * MM_CELL + MM_CELL / 2 + dy
+			var px = gx * MM_CELL + half + dx
+			var py = gy * MM_CELL + half + dy
 			if px >= 0 and px < w and py >= 0 and py < h:
 				_mm_image.set_pixel(px, py, col)
 
