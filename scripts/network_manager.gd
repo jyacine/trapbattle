@@ -65,10 +65,16 @@ func _on_host_peer_connected(id: int) -> void:
 	lobby_updated.emit(Array(_peers))
 
 # ── Join (client connecting to listen-server or dedicated server) ─────────────
-func join_game(ip: String) -> void:
+func join_game(ip: String, room: int = 0) -> void:
 	# Connect over standard HTTPS port 443 (Caddy terminates TLS there and proxies
 	# to the Godot backend). Using 443 avoids non-standard-port browser quirks.
-	var url = "wss://%s" % ip
+	# room >= 1 selects a multi-room server instance via Caddy path routing
+	# (wss://host/play/N); room 0 keeps the legacy root path (single-room server).
+	var url: String
+	if room >= 1:
+		url = "wss://%s/play/%d" % [ip, room]
+	else:
+		url = "wss://%s" % ip
 	var peer = WebSocketMultiplayerPeer.new()
 	var err  = peer.create_client(url)
 	if err != OK:

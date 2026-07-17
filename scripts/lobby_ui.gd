@@ -431,9 +431,222 @@ func _on_host() -> void:
 
 func _on_join() -> void:
 	_apply_identity()
+	_open_lobby_browser()
+
+# ── Lobby browser (multi-room) ────────────────────────────────────────────────
+# Lists every server room with its live status (map, players, time playing) so
+# the player can join a running/waiting game or create a fresh one by taking an
+# empty room. Status comes from GET https://<host>/status/<N> (Caddy → the
+# room's StatusServer).
+const NUM_ROOMS := 4
+var _browser_nodes:  Array = []      # everything to remove on BACK
+var _room_rows:      Array = []      # per room: { "label": Label, "btn": Button }
+var _browser_status: Label = null
+var _refresh_timer:  Timer = null
+var _joining_room:   int   = 0
+
+func _open_lobby_browser() -> void:
+	if not _browser_nodes.is_empty():
+		return
+	var bg = ColorRect.new()
+	bg.set_anchors_preset(Control.PRESET_FULL_RECT)
+	bg.color = Color(0.05, 0.05, 0.10, 1.0)
+	add_child(bg)
+	_track_browser(bg)
+
+	var title = Label.new()
+	title.text = "GAME LOBBIES"
+	title.add_theme_font_size_override("font_size", 36)
+	title.add_theme_color_override("font_color", Color.YELLOW)
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title.anchor_left = 0.0; title.anchor_right = 1.0
+	title.anchor_top  = 0.5; title.anchor_bottom = 0.5
+	title.offset_top  = -252; title.offset_bottom = -200
+	add_child(title)
+	_track_browser(title)
+
+	_room_rows.clear()
+	for i in NUM_ROOMS:
+		var room := i + 1
+		var y: float = -170.0 + float(i) * 74.0
+
+		var row_bg = ColorRect.new()
+		row_bg.color = Color(0.10, 0.12, 0.18, 0.95)
+		row_bg.anchor_left = 0.5; row_bg.anchor_right  = 0.5
+		row_bg.anchor_top  = 0.5; row_bg.anchor_bottom = 0.5
+		row_bg.offset_left = -280; row_bg.offset_right = 280
+		row_bg.offset_top  = y;    row_bg.offset_bottom = y + 62
+		add_child(row_bg)
+		_track_browser(row_bg)
+
+		var lbl = Label.new()
+		lbl.text = "Room %d — checking…" % room
+		lbl.add_theme_font_size_override("font_size", 17)
+		lbl.add_theme_color_override("font_color", Color(0.8, 0.85, 0.95))
+		lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		lbl.anchor_left = 0.5; lbl.anchor_right  = 0.5
+		lbl.anchor_top  = 0.5; lbl.anchor_bottom = 0.5
+		lbl.offset_left = -266; lbl.offset_right = 130
+		lbl.offset_top  = y;    lbl.offset_bottom = y + 62
+		add_child(lbl)
+		_track_browser(lbl)
+
+		var btn = _mk_btn("…", Color(0.25, 0.28, 0.35))
+		btn.disabled = true
+		btn.anchor_left = 0.5; btn.anchor_right  = 0.5
+		btn.anchor_top  = 0.5; btn.anchor_bottom = 0.5
+		btn.offset_left = 142;  btn.offset_right = 272
+		btn.offset_top  = y + 7; btn.offset_bottom = y + 55
+		var r := room
+		btn.pressed.connect(func(): _join_room(r))
+		add_child(btn)
+		_track_browser(btn)
+
+		_room_rows.append({ "label": lbl, "btn": btn })
+
+	_browser_status = Label.new()
+	_browser_status.text = "Fetching room list from %s …" % _ip_field.text.strip_edges()
+	_browser_status.add_theme_font_size_override("font_size", 16)
+	_browser_status.add_theme_color_override("font_color", Color(0.6, 1.0, 0.6))
+	_browser_status.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_browser_status.anchor_left = 0.0; _browser_status.anchor_right = 1.0
+	_browser_status.anchor_top  = 0.5; _browser_status.anchor_bottom = 0.5
+	_browser_status.offset_top  = 140; _browser_status.offset_bottom = 172
+	add_child(_browser_status)
+	_track_browser(_browser_status)
+
+	var back = _mk_btn("BACK", Color(0.45, 0.20, 0.20))
+	back.anchor_left = 0.5; back.anchor_right  = 0.5
+	back.anchor_top  = 0.5; back.anchor_bottom = 0.5
+	back.offset_left = -280; back.offset_right = -40
+	back.offset_top  = 186;  back.offset_bottom = 238
+	back.pressed.connect(_close_lobby_browser)
+	add_child(back)
+	_track_browser(back)
+
+	var refresh = _mk_btn("REFRESH", Color(0.15, 0.40, 0.60))
+	refresh.anchor_left = 0.5; refresh.anchor_right  = 0.5
+	refresh.anchor_top  = 0.5; refresh.anchor_bottom = 0.5
+	refresh.offset_left = 40;  refresh.offset_right = 280
+	refresh.offset_top  = 186; refresh.offset_bottom = 238
+	refresh.pressed.connect(_refresh_rooms)
+	add_child(refresh)
+	_track_browser(refresh)
+
+	# Hide the main-menu widgets behind the browser (they come back on BACK).
+	for c: Node in _menu_nodes:
+		if is_instance_valid(c): c.visible = false
+
+	_refresh_timer = Timer.new()
+	_refresh_timer.wait_time = 3.0
+	_refresh_timer.timeout.connect(_refresh_rooms)
+	add_child(_refresh_timer)
+	_refresh_timer.start()
+	_track_browser(_refresh_timer)
+
+	_refresh_rooms()
+
+# Track a browser node in BOTH lists: _browser_nodes so BACK can free it, and
+# _menu_nodes so entering the 3-D lobby room / rejection screens hide it too.
+func _track_browser(n: Node) -> void:
+	_browser_nodes.append(n)
+	_menu_nodes.append(n)
+
+func _close_lobby_browser() -> void:
+	_joining_room = 0
+	for n: Node in _browser_nodes:
+		if is_instance_valid(n):
+			_menu_nodes.erase(n)
+			n.queue_free()
+	_browser_nodes.clear()
+	_room_rows.clear()
+	_browser_status = null
+	_refresh_timer  = null
+	for c: Node in _menu_nodes:
+		if is_instance_valid(c): c.visible = true
+
+func _refresh_rooms() -> void:
+	if _joining_room > 0:
+		return   # freeze the list while connecting
+	var host := _ip_field.text.strip_edges()
+	for i in NUM_ROOMS:
+		var room := i + 1
+		var req := HTTPRequest.new()
+		req.timeout = 4.0
+		add_child(req)
+		var r := room
+		req.request_completed.connect(
+			func(_result: int, code: int, _headers: PackedStringArray, body: PackedByteArray):
+				req.queue_free()
+				_on_room_status(r, code, body))
+		if req.request("https://%s/status/%d" % [host, room]) != OK:
+			req.queue_free()
+			_on_room_status(room, 0, PackedByteArray())
+
+func _on_room_status(room: int, code: int, body: PackedByteArray) -> void:
+	if _room_rows.size() < room or _joining_room > 0:
+		return
+	var row: Dictionary = _room_rows[room - 1]
+	var lbl: Label  = row["label"]
+	var btn: Button = row["btn"]
+	if not is_instance_valid(lbl) or not is_instance_valid(btn):
+		return
+
+	if code != 200:
+		lbl.text = "Room %d — offline" % room
+		lbl.add_theme_color_override("font_color", Color(0.5, 0.5, 0.55))
+		btn.text = "—"
+		btn.disabled = true
+		return
+
+	var st = JSON.parse_string(body.get_string_from_utf8())
+	if not st is Dictionary:
+		lbl.text = "Room %d — bad status" % room
+		btn.disabled = true
+		return
+
+	var players: int  = int(st.get("players", 0))
+	var maxp:    int  = int(st.get("max", 10))
+	var started: bool = bool(st.get("started", false))
+	var map_id:  int  = int(st.get("map", 1))
+	var elapsed: int  = int(st.get("elapsed", 0))
+
+	btn.disabled = players >= maxp
+	if players == 0:
+		lbl.text = "Room %d  —  Empty" % room
+		lbl.add_theme_color_override("font_color", Color(0.65, 0.95, 0.65))
+		btn.text = "CREATE"
+		_style_browser_btn(btn, Color(0.20, 0.60, 0.25))
+	elif not started:
+		lbl.text = "Room %d  —  In lobby  —  %d/%d players" % [room, players, maxp]
+		lbl.add_theme_color_override("font_color", Color(0.85, 0.92, 1.0))
+		btn.text = "JOIN"
+		_style_browser_btn(btn, Color(0.15, 0.40, 0.80))
+	else:
+		var mins: int = int(float(elapsed) / 60.0)
+		var secs: int = elapsed % 60
+		lbl.text = "Room %d  —  %s  —  %d/%d  —  playing %d:%02d" % [
+			room, Config.map_name(map_id), players, maxp, mins, secs]
+		lbl.add_theme_color_override("font_color", Color(1.0, 0.85, 0.45))
+		btn.text = "FULL" if players >= maxp else "JOIN"
+		_style_browser_btn(btn, Color(0.75, 0.45, 0.10))
+
+func _style_browser_btn(b: Button, col: Color) -> void:
+	var sb = StyleBoxFlat.new()
+	sb.bg_color = col
+	sb.set_corner_radius_all(8)
+	b.add_theme_stylebox_override("normal", sb)
+
+func _join_room(room: int) -> void:
+	if _joining_room > 0:
+		return
+	_joining_room = room
+	if _refresh_timer and is_instance_valid(_refresh_timer):
+		_refresh_timer.stop()
 	var ip = _ip_field.text.strip_edges()
-	_status.text = "Connecting to %s â€¦" % ip
-	_net.join_game(ip)
+	if _browser_status:
+		_browser_status.text = "Connecting to room %d on %s …" % [room, ip]
+	_net.join_game(ip, room)
 
 func _on_connected() -> void:
 	# Defer building the 3-D lobby room by ~400 ms.  When a player joins a
