@@ -448,6 +448,11 @@ var _joining_room:   int   = 0
 func _open_lobby_browser() -> void:
 	if not _browser_nodes.is_empty():
 		return
+	# Hide the main menu FIRST — browser nodes are appended to _menu_nodes as
+	# they are created (via _track_browser), so hiding afterwards would hide the
+	# freshly built browser too (the "no room selection" black-screen bug).
+	for c: Node in _menu_nodes:
+		if is_instance_valid(c): c.visible = false
 	var bg = ColorRect.new()
 	bg.set_anchors_preset(Control.PRESET_FULL_RECT)
 	bg.color = Color(0.05, 0.05, 0.10, 1.0)
@@ -533,10 +538,6 @@ func _open_lobby_browser() -> void:
 	add_child(refresh)
 	_track_browser(refresh)
 
-	# Hide the main-menu widgets behind the browser (they come back on BACK).
-	for c: Node in _menu_nodes:
-		if is_instance_valid(c): c.visible = false
-
 	_refresh_timer = Timer.new()
 	_refresh_timer.wait_time = 3.0
 	_refresh_timer.timeout.connect(_refresh_rooms)
@@ -591,45 +592,15 @@ func _on_room_status(room: int, code: int, body: PackedByteArray) -> void:
 	var btn: Button = row["btn"]
 	if not is_instance_valid(lbl) or not is_instance_valid(btn):
 		return
-
-	if code != 200:
-		lbl.text = "Room %d — offline" % room
-		lbl.add_theme_color_override("font_color", Color(0.5, 0.5, 0.55))
-		btn.text = "—"
-		btn.disabled = true
-		return
-
-	var st = JSON.parse_string(body.get_string_from_utf8())
-	if not st is Dictionary:
-		lbl.text = "Room %d — bad status" % room
-		btn.disabled = true
-		return
-
-	var players: int  = int(st.get("players", 0))
-	var maxp:    int  = int(st.get("max", 10))
-	var started: bool = bool(st.get("started", false))
-	var map_id:  int  = int(st.get("map", 1))
-	var elapsed: int  = int(st.get("elapsed", 0))
-
-	btn.disabled = players >= maxp
-	if players == 0:
-		lbl.text = "Room %d  —  Empty" % room
-		lbl.add_theme_color_override("font_color", Color(0.65, 0.95, 0.65))
-		btn.text = "CREATE"
-		_style_browser_btn(btn, Color(0.20, 0.60, 0.25))
-	elif not started:
-		lbl.text = "Room %d  —  In lobby  —  %d/%d players" % [room, players, maxp]
-		lbl.add_theme_color_override("font_color", Color(0.85, 0.92, 1.0))
-		btn.text = "JOIN"
-		_style_browser_btn(btn, Color(0.15, 0.40, 0.80))
-	else:
-		var mins: int = int(float(elapsed) / 60.0)
-		var secs: int = elapsed % 60
-		lbl.text = "Room %d  —  %s  —  %d/%d  —  playing %d:%02d" % [
-			room, Config.map_name(map_id), players, maxp, mins, secs]
-		lbl.add_theme_color_override("font_color", Color(1.0, 0.85, 0.45))
-		btn.text = "FULL" if players >= maxp else "JOIN"
-		_style_browser_btn(btn, Color(0.75, 0.45, 0.10))
+	var st = JSON.parse_string(body.get_string_from_utf8()) if code == 200 else null
+	# Row content decided by RoomStatus.format_room_row (pure static — covered
+	# by tests/test_lobby_browser.gd).
+	var r: Dictionary = RoomStatus.format_room_row(room, code, st)
+	lbl.text = r["text"]
+	lbl.add_theme_color_override("font_color", r["color"])
+	btn.text     = r["btn"]
+	btn.disabled = r["disabled"]
+	_style_browser_btn(btn, r["btn_color"])
 
 func _style_browser_btn(b: Button, col: Color) -> void:
 	var sb = StyleBoxFlat.new()
