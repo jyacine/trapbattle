@@ -348,7 +348,7 @@ func _build_lobby_overlay() -> void:
 # â”€â”€ Transition from menu â†’ 3-D lobby room â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 func _enter_lobby_room() -> void:
 	for c: Node in _menu_nodes:
-		if is_instance_valid(c):
+		if is_instance_valid(c) and c is CanvasItem:
 			c.visible = false
 
 	_lobby_room = LobbyRoom.new()
@@ -452,7 +452,7 @@ func _open_lobby_browser() -> void:
 	# they are created (via _track_browser), so hiding afterwards would hide the
 	# freshly built browser too (the "no room selection" black-screen bug).
 	for c: Node in _menu_nodes:
-		if is_instance_valid(c): c.visible = false
+		if is_instance_valid(c) and c is CanvasItem: c.visible = false
 	var bg = ColorRect.new()
 	bg.set_anchors_preset(Control.PRESET_FULL_RECT)
 	bg.color = Color(0.05, 0.05, 0.10, 1.0)
@@ -543,7 +543,10 @@ func _open_lobby_browser() -> void:
 	_refresh_timer.timeout.connect(_refresh_rooms)
 	add_child(_refresh_timer)
 	_refresh_timer.start()
-	_track_browser(_refresh_timer)
+	# Cleanup list ONLY — a Timer has no `visible` property, so putting it in
+	# _menu_nodes made every hide/show loop crash with "Invalid assignment of
+	# property or key 'visible' ... on a base object of type 'Timer'".
+	_browser_nodes.append(_refresh_timer)
 
 	_refresh_rooms()
 
@@ -564,7 +567,7 @@ func _close_lobby_browser() -> void:
 	_browser_status = null
 	_refresh_timer  = null
 	for c: Node in _menu_nodes:
-		if is_instance_valid(c): c.visible = true
+		if is_instance_valid(c) and c is CanvasItem: c.visible = true
 
 func _refresh_rooms() -> void:
 	if _joining_room > 0:
@@ -697,7 +700,7 @@ func _enter_lobby_room_deferred() -> void:
 func _on_game_in_progress() -> void:
 	_rejected = true
 	for c: Node in _menu_nodes:
-		if is_instance_valid(c): c.visible = false
+		if is_instance_valid(c) and c is CanvasItem: c.visible = false
 
 	var bg = ColorRect.new()
 	bg.set_anchors_preset(Control.PRESET_FULL_RECT)
