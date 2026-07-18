@@ -170,7 +170,19 @@ func _ready() -> void:
 	if USE_WEBRTC and not multiplayer.is_server():
 		_setup_webrtc()
 
+# Web Opus via WebCodecs — DISABLED. Live server diagnostics showed every web
+# client stuck at tx_ws=0 with codec=opus: mic frames flowed (rate-cal measured
+# ~50 kHz) but the browser AudioEncoder produced no packets. Chrome's WebCodecs
+# Opus implementation only guarantees 48 kHz; our 24 kHz configure() fails
+# asynchronously (the error lands in the browser console only) and the encode
+# queue stays empty forever, so NOTHING is ever transmitted. Web now uses the
+# PCM16-over-relay path, which the E2E test validates at SNR 64 dB.
+# Re-enable only with a full 48 kHz pipeline (encoder + decoder + jitter rate).
+const USE_OPUS_WEB := false
+
 func _init_opus_web() -> void:
+	if not USE_OPUS_WEB:
+		return
 	if not OS.has_feature("web"):
 		return
 	if not bool(JavaScriptBridge.eval("typeof AudioEncoder !== 'undefined'")):
@@ -722,6 +734,10 @@ func _push_to_speaker(sender_id: int, bytes: PackedByteArray) -> void:
 		var player = AudioStreamPlayer3D.new()
 		player.stream       = gen
 		player.autoplay     = true
+		# Web export defaults to SAMPLE playback (audio/general/default_playback_type.web),
+		# which cannot play an AudioStreamGenerator — the speaker would be silent
+		# in browsers. Force STREAM playback (native already defaults to it).
+		player.playback_type = AudioServer.PLAYBACK_TYPE_STREAM
 		# Spatial voice, tuned so it can never be inaudible:
 		#  - max_distance = 0  → no hard cutoff (unit_size=3/max=40 made distant
 		#    teammates silent in the 54-unit maze — reported as "voice broken")
@@ -732,8 +748,17 @@ func _push_to_speaker(sender_id: int, bytes: PackedByteArray) -> void:
 		player.unit_size    = 12.0
 		player.attenuation_filter_cutoff_hz = 20500
 		add_child(player)
+		player.play()   # belt & braces alongside autoplay — playback must be live
+		var pb := player.get_stream_playback() as AudioStreamGeneratorPlayback
+		if pb == null:
+			# Playback not obtainable (should not happen once playing) — drop the
+			# node so the NEXT packet recreates the speaker instead of leaving a
+			# permanently silent entry in _speakers.
+			push_warning("[voice] no generator playback for peer %d — retrying on next packet" % sender_id)
+			player.queue_free()
+			return
 		_speaker_nodes[sender_id] = player
-		_speakers[sender_id]      = player.get_stream_playback() as AudioStreamGeneratorPlayback
+		_speakers[sender_id]      = pb
 		_jq[sender_id]      = PackedVector2Array()
 		_jq_pos[sender_id]  = 0
 		_jq_play[sender_id] = false
