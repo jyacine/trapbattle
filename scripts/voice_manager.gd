@@ -22,29 +22,31 @@ signal voice_received(sender_id: int, samples: PackedFloat32Array)
 const VOICE_RATE      := 24000   # send/playback rate — wideband voice (12 kHz band), clearer
 const SEND_INTERVAL   := 0.02    # seconds between audio packets
 const SPEAKING_TIMEOUT := 0.30   # silence after last packet → "stopped speaking"
-const VAD_THRESHOLD   := 0.006   # mic RMS above this counts as speech (favor transmitting)
-const VAD_HANGOVER    := 0.35    # keep transmitting this long after speech dips (smoother tails)
+const VAD_THRESHOLD   := 0.004   # mic RMS above this counts as speech (favor transmitting)
+const VAD_HANGOVER    := 0.50    # keep transmitting this long after speech dips (smoother tails)
 const MIC_BUS         := "VoiceMic"
+# Pre-roll: audio kept from just BEFORE the VAD fires and prepended to the first
+# burst, so soft word onsets below the threshold aren't clipped ("missed
+# syllables"). 100 ms covers typical consonant attacks.
+const PREROLL_S       := 0.10
 
 # ── Jitter buffer (fixes choppy playback) ────────────────────────────────────
-# Voice originally rode WebSocket (TCP). Now it travels over an unreliable UDP
-# DataChannel — packets arrive at a steady ~20 ms cadence with much less jitter
-# than TCP. Constants are tuned for UDP: smaller target/prebuf → lower latency.
-# If voice falls back to WebSocket the buffer may underrun more often under burst
-# loss, but that path already has higher latency so the trade-off is acceptable.
-const GEN_BUFFER_LEN := 0.12    # AudioStreamGenerator internal buffer (s)
-const JITTER_TARGET  := 0.06    # keep ~60 ms buffered in the generator
-# WHY 60 ms: pump runs once per game frame. At 25 fps (40 ms/frame) the generator
-# drains 24000×0.04=960 frames/frame. We must push that much back, so deficit must
-# be ≥ 960. deficit = target − buffered_after_drain = target − (target−960) = 960.
-# That only holds while target > drain/frame, i.e. target > VOICE_RATE/fps.
-# At 25 fps: 24000/25=960 frames=40 ms. At 17 fps: ~1400 frames=58 ms.
-# 60 ms (1440 frames) keeps the queue stable down to ~17 fps.
-const JITTER_PREBUF  := 0.03    # accumulate 30 ms before (re)starting playout
-const JITTER_MAX     := 0.15    # cap queued audio at 150 ms
+# In practice voice rides the WebSocket relay (TCP): the WebRTC DataChannel never
+# opens for web clients (diag shows ch=CONNECTING), and TCP delivery is BURSTY —
+# a delayed segment arrives together with everything queued behind it. The
+# buffer is therefore tuned for TCP: deeper target/prebuf/cap trade ~100 ms of
+# extra latency for far fewer underruns (each underrun = an audible chop, which
+# players reported as "noisy / missing syllables").
+const GEN_BUFFER_LEN := 0.20    # AudioStreamGenerator internal buffer (s)
+const JITTER_TARGET  := 0.10    # keep ~100 ms buffered in the generator
+# The pump runs once per game frame and must out-pace the per-frame drain:
+# target must exceed VOICE_RATE/fps. At 17 fps the drain is ~1400 frames
+# (58 ms); 100 ms (2400 frames) keeps the queue stable well below that.
+const JITTER_PREBUF  := 0.06    # accumulate 60 ms before (re)starting playout
+const JITTER_MAX     := 0.30    # cap queued audio at 300 ms (TCP bursts fit)
 # Silence padding on underrun: push zeros so the generator keeps running (avoids
-# click) and the restart is inaudible; 30 ms matches the new JITTER_PREBUF.
-const JITTER_SILENCE_PAD := 0.03  # seconds of zeros to push on each underrun restart
+# click) and the restart is inaudible; matches JITTER_PREBUF.
+const JITTER_SILENCE_PAD := 0.06  # seconds of zeros to push on each underrun restart
 
 # ── WebRTC DataChannel transport (UDP — off the TCP/WebSocket plane) ──────────
 # When enabled, voice flows over an UNRELIABLE/UNORDERED WebRTC DataChannel to the
@@ -123,6 +125,10 @@ var _rate_cal_measured: float = -1.0   # stored once when calibration window clo
 # resample timeline never breaks across chunks.
 var _rs_in:  PackedFloat32Array = PackedFloat32Array()  # unconsumed source samples
 var _rs_pos: float = 0.0                                 # fractional cursor into _rs_in
+
+# Rolling buffer of the most recent resampled audio captured while SILENT.
+# Prepended to the first packet of each speech burst (see PREROLL_S).
+var _preroll: PackedFloat32Array = PackedFloat32Array()
 
 # peer_id → AudioStreamGeneratorPlayback  (remote voices)
 var _speakers:      Dictionary = {}
@@ -345,21 +351,39 @@ func _capture_and_send() -> void:
 		_vad_hangover = max(0.0, _vad_hangover - SEND_INTERVAL)
 
 	var speaking := _vad_hangover > 0.0
+	var just_started := false
 	if speaking != _local_speaking:
 		_local_speaking = speaking
 		player_speaking_changed.emit(multiplayer.get_unique_id(), speaking)
 		if speaking:
-			# New speech segment: reset the codec + resampler so it starts clean (no
-			# stale predictor click, no discontinuity carried from the previous burst).
+			just_started = true
+			# Fresh ADPCM stream per burst — safe because every packet carries the
+			# predictor/index in its header, so the decoder can't click.
 			_enc_predictor = 0
 			_enc_index     = 0
-			_resample_reset()
+
+	# Resample CONTINUOUSLY — during silence too. The old code reset the
+	# resampler at every speech onset, discarding its buffered tail: combined
+	# with the VAD threshold this clipped the first syllable of each sentence.
+	var samples := _resample_stream(frames, _capture_rate, float(VOICE_RATE))
 
 	if not speaking:
-		return   # silence — transmit nothing
+		# Not transmitting — keep the freshest PREROLL_S of audio so the next
+		# burst can prepend the soft onset that sat below the VAD threshold.
+		if not samples.is_empty():
+			_preroll.append_array(samples)
+			var maxn := int(PREROLL_S * float(VOICE_RATE))
+			if _preroll.size() > maxn:
+				_preroll = _preroll.slice(_preroll.size() - maxn)
+		return
 
-	# Resample capture_rate → VOICE_RATE (continuous), then 4-bit IMA-ADPCM compress.
-	var samples := _resample_stream(frames, _capture_rate, float(VOICE_RATE))
+	if just_started and not _preroll.is_empty():
+		var joined := PackedFloat32Array()
+		joined.append_array(_preroll)
+		joined.append_array(samples)
+		samples  = joined
+		_preroll = PackedFloat32Array()
+
 	if samples.is_empty(): return
 
 	var my_id = multiplayer.get_unique_id()
@@ -371,25 +395,28 @@ func _capture_and_send() -> void:
 		JavaScriptBridge.get_interface("window")["_tbv_pcm"] = js_f32
 		JavaScriptBridge.eval("window.TBVoice.encode(window._tbv_pcm, %d)" % Time.get_ticks_usec())
 	elif _rtc_open and _vch != null and _vch.get_ready_state() == WebRTCDataChannel.STATE_OPEN:
-		# High-quality path: PCM16 over UDP DataChannel.
+		# UDP DataChannel: PCM16 (bandwidth is not contended off the TCP plane).
 		var payload := PackedByteArray()
 		payload.append(VOICE_FMT_PCM16)
 		payload.append_array(_pack_pcm16(samples))
 		_vch.put_packet(payload)
 		_diag_tx_rtc += 1
-	elif multiplayer.is_server():
-		# WebSocket fallback (listen-server): PCM16 to avoid ADPCM quantisation noise.
-		var payload := PackedByteArray()
-		payload.append(VOICE_FMT_PCM16)
-		payload.append_array(_pack_pcm16(samples))
-		_rpc_play_voice.rpc(payload, my_id)
-		_diag_tx_ws += 1
 	else:
-		# WebSocket fallback (dedicated server): PCM16 over relay.
+		# WebSocket relay (TCP): 4-bit IMA-ADPCM. PCM16 here was 384 kbps while
+		# speaking — sharing the TCP pipe with gameplay RPCs it caused burst
+		# congestion, jitter-cap drops and underruns ("noisy, missing syllables").
+		# ADPCM is 96 kbps with round-trip error ~0.002 (inaudible for speech).
+		var enc := adpcm_encode(samples, _enc_predictor, _enc_index)
+		_enc_predictor = enc["predictor"]
+		_enc_index     = enc["index"]
+		var enc_bytes: PackedByteArray = enc["bytes"]
 		var payload := PackedByteArray()
-		payload.append(VOICE_FMT_PCM16)
-		payload.append_array(_pack_pcm16(samples))
-		_rpc_voice.rpc_id(1, payload, my_id)
+		payload.append(VOICE_FMT_ADPCM)
+		payload.append_array(enc_bytes)
+		if multiplayer.is_server():
+			_rpc_play_voice.rpc(payload, my_id)      # listen-server broadcast
+		else:
+			_rpc_voice.rpc_id(1, payload, my_id)     # dedicated-server relay
 		_diag_tx_ws += 1
 
 # Poll the JS Opus encoder queue and send any completed packets over the active channel.
@@ -436,10 +463,12 @@ func _poll_opus_decoded() -> void:
 				mono[i] = clampf(float(frame[i]), -1.0, 1.0)
 			_push_pcm_to_jitter(pid, mono)
 
-# Clear the streaming resampler (call on mute/unmute and at each speech onset).
+# Clear the streaming resampler + pre-roll (called on mute/unmute only — the
+# resample timeline stays continuous across speech bursts).
 func _resample_reset() -> void:
-	_rs_in  = PackedFloat32Array()
-	_rs_pos = 0.0
+	_rs_in   = PackedFloat32Array()
+	_rs_pos  = 0.0
+	_preroll = PackedFloat32Array()
 
 # Instance wrapper: append the new mic chunk (frames[i].x) to the persistent source
 # buffer, then emit every destination sample that is now fully available, carrying
@@ -701,7 +730,7 @@ func _send_diag() -> void:
 	var cal_str := "pending"
 	if _rate_cal_measured >= 0.0:
 		cal_str = "%.0fHz" % _rate_cal_measured
-	var codec_str := "opus" if _opus_web else "pcm16"
+	var codec_str := "opus" if _opus_web else ("pcm16" if _rtc_open else "adpcm")
 	var payload := "peer=%d path=%s ch=%s cap=%.0fHz cal=%s codec=%s tx_rtc=%d tx_ws=%d underruns=%d jitter=[%s]" % [
 		multiplayer.get_unique_id(),
 		"UDP/DataChannel" if _rtc_open else "WebSocket",
