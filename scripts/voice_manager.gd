@@ -207,7 +207,12 @@ func _setup_mic() -> void:
 		AudioServer.add_bus()
 		var new_idx = AudioServer.bus_count - 1
 		AudioServer.set_bus_name(new_idx, MIC_BUS)
-		AudioServer.add_bus_effect(new_idx, AudioEffectCapture.new())
+		var cap_fx := AudioEffectCapture.new()
+		# Default ring is 0.1 s: one mobile-web frame hitch >100 ms overflows it
+		# and mic audio is lost before it is ever read ("missed words"). 0.5 s
+		# rides out hitches; the catch-up read then drains the backlog.
+		cap_fx.buffer_length = 0.5
+		AudioServer.add_bus_effect(new_idx, cap_fx)
 
 	var bus_idx = AudioServer.get_bus_index(MIC_BUS)
 	# MUTE the mic bus output so we never hear our own voice locally (monitoring
@@ -388,6 +393,20 @@ func _capture_and_send() -> void:
 
 	var my_id = multiplayer.get_unique_id()
 
+	# Send in ≤20 ms slices. After a frame hitch this call reads the whole
+	# capture backlog at once; as ONE packet that can exceed the server's
+	# MAX_VOICE_PACKET_BYTES sanity cap (1600 B) and be dropped WHOLE — heard
+	# as a missing word right after every hitch (frequent on mobile web). The
+	# onset pre-roll burst is also split. 480 samples ≈ 244 B ADPCM / 961 B PCM16.
+	var chunk_n := 480
+	var off := 0
+	while off < samples.size():
+		var part := samples.slice(off, mini(off + chunk_n, samples.size()))
+		off += chunk_n
+		_send_voice_packet(part, my_id)
+
+# Dispatch one ≤20 ms slice over the active transport.
+func _send_voice_packet(samples: PackedFloat32Array, my_id: int) -> void:
 	if _opus_web:
 		# Opus path: submit samples to the browser's AudioEncoder; encoded packets
 		# are polled and sent in _poll_opus_encoded() each _process tick.

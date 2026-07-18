@@ -1260,28 +1260,50 @@ func _input(event: InputEvent) -> void:
 	elif event is InputEventScreenDrag:
 		var drag := event as InputEventScreenDrag
 		var dpos: Vector2 = drag.position
-		# Button-anchored turn/aim drags stay keyed to their own finger index.
-		if event.index == _fire_id:
-			_apply_turn(dpos - _look_prev_fire)
-			_look_prev_fire = dpos
-			get_viewport().set_input_as_handled()
-		elif event.index == _trap_id:
-			_apply_turn(dpos - _look_prev_trap)
-			_look_prev_trap = dpos
-			get_viewport().set_input_as_handled()
-		# Joystick (move) and look (turn) are routed by SCREEN REGION, not by the
-		# touch index. Godot HTML5 multi-touch can deliver a drag under the OTHER
-		# finger index when two fingers are down (godot #94346 / #33470), so a
-		# left-side joystick drag could arrive tagged with the look index and spin
-		# the camera -- the chaotic movement when you hold look (right) then drag to
-		# move (left). Routing by position is immune to that index swap.
-		elif _joy_id != -1 and dpos.x < vp_hw:
-			_joy_update(dpos)
-			get_viewport().set_input_as_handled()
-		elif _look_id != -1 and dpos.x >= vp_hw:
-			_apply_turn(dpos - _look_prev)
-			_look_prev = dpos
-			get_viewport().set_input_as_handled()
+		# ROUTE BY SCREEN REGION FIRST, finger index second. Godot HTML5
+		# multi-touch can deliver a drag under the OTHER finger's index when two
+		# fingers are down (godot #94346 / #33470). The old code matched the
+		# fire/trap index BEFORE any region check, so pressing FIRE first and
+		# then dragging the joystick made the move finger's drags (mis-tagged
+		# with the fire index) spin the camera — the "chaotic movement when I
+		# fire first then move" bug. A left-half drag can only ever be MOVE; a
+		# right-half drag can only ever be TURN/AIM.
+		if dpos.x < vp_hw:
+			if _joy_id != -1:
+				_joy_update(dpos)
+				get_viewport().set_input_as_handled()
+			return   # the left half never turns the camera
+		# Right half → camera turn, anchored to whichever control the finger is
+		# holding. With ONE right-half control held the index tag is untrusted
+		# (it may carry the joystick's index after a swap); with several held,
+		# fall back to index matching to keep the anchors separate.
+		var held := 0
+		if _fire_id != -1: held += 1
+		if _trap_id != -1: held += 1
+		if _look_id != -1: held += 1
+		if held == 0:
+			return
+		var kind := ""
+		if held == 1:
+			if _fire_id != -1:   kind = "fire"
+			elif _trap_id != -1: kind = "trap"
+			else:                kind = "look"
+		else:
+			if event.index == _fire_id:   kind = "fire"
+			elif event.index == _trap_id: kind = "trap"
+			elif event.index == _look_id: kind = "look"
+			else: return
+		match kind:
+			"fire":
+				_apply_turn(dpos - _look_prev_fire)
+				_look_prev_fire = dpos
+			"trap":
+				_apply_turn(dpos - _look_prev_trap)
+				_look_prev_trap = dpos
+			"look":
+				_apply_turn(dpos - _look_prev)
+				_look_prev = dpos
+		get_viewport().set_input_as_handled()
 
 func _apply_turn(delta: Vector2) -> void:
 	if player == null:
