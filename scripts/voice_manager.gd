@@ -64,7 +64,28 @@ const JITTER_SILENCE_PAD := 0.06  # seconds of zeros to push on each underrun re
 # built in (browser), so no client-side addon is needed.
 const USE_WEBRTC   := true
 const RTC_STUN     := "stun:stun.l.google.com:19302"
+# TURN relay (coturn on the game VM). REQUIRED for the DataChannel to open for
+# clients behind symmetric NAT / CGNAT — i.e. essentially all MOBILE networks.
+# STUN-only hole-punching works for home broadband but always fails on mobile,
+# so those clients were stuck on the choppy TCP/WebSocket fallback. TURN relays
+# their UDP through the server.
+# These credentials are intentionally public (WebRTC always exposes TURN creds to
+# the client). They grant ONLY relay use, are quota-capped in turnserver.conf,
+# and are blocked from reaching internal/metadata IPs. Rotate by editing
+# /etc/turnserver.conf on the VM and this line together (must match the server repo).
+const RTC_TURN      := "turn:34.155.132.207:3478"
+const RTC_TURN_USER := "tbvoice"
+const RTC_TURN_PASS := "96d12f6eb70c28648c18d4decba76c6e"
 const RTC_CH_ID    := 1          # negotiated DataChannel id — MUST match the server
+
+# ICE server list shared by client PC setup — STUN for reflexive discovery, TURN
+# (udp primary, tcp fallback for UDP-blocked networks) for the symmetric-NAT case.
+static func _ice_servers() -> Array:
+	return [
+		{ "urls": [RTC_STUN] },
+		{ "urls": [RTC_TURN, RTC_TURN + "?transport=tcp"],
+		  "username": RTC_TURN_USER, "credential": RTC_TURN_PASS },
+	]
 
 # ── IMA-ADPCM codec tables (standard) ────────────────────────────────────────
 # 4 bits/sample. Each relayed packet is self-contained: a 3-byte header carries
@@ -670,7 +691,7 @@ func _setup_webrtc() -> void:
 	# raises "Attempted to free a RefCounted object", which breaks the editor
 	# debugger the moment a game is joined.
 	var rtc := WebRTCPeerConnection.new()
-	if rtc == null or rtc.initialize({ "iceServers": [ { "urls": [RTC_STUN] } ] }) != OK:
+	if rtc == null or rtc.initialize({ "iceServers": _ice_servers() }) != OK:
 		push_warning("[voice] WebRTC unavailable — using WebSocket relay")
 		return
 	_rtc = rtc
