@@ -357,6 +357,15 @@ func _enter_lobby_room() -> void:
 
 	_build_lobby_overlay()
 
+	# Repaint immediately from NetworkManager's CURRENT roster. The server's
+	# _rpc_lobby_update broadcast typically arrives well within the 400 ms delay
+	# before this function runs (see _on_connected), so _on_lobby_updated already
+	# fired and silently no-op'd against the _player_list/_lobby_room null guards
+	# above — the state was stored in NetworkManager but never painted. Without
+	# this call the joining player sees an empty/stale roster until a THIRD
+	# player triggers the next broadcast.
+	_on_lobby_updated(_net.peer_ids)
+
 # â”€â”€ Button callbacks â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 func _on_single_player() -> void:
 	start_game.emit(0, false)
@@ -426,8 +435,7 @@ func _apply_identity() -> void:
 func _on_host() -> void:
 	_apply_identity()
 	_net.host_game()        # sets _peers=[1], emits lobby_updated([1])
-	_enter_lobby_room()
-	_on_lobby_updated([1])
+	_enter_lobby_room()      # repaints from _net.peer_ids itself — see there
 
 func _on_join() -> void:
 	_apply_identity()

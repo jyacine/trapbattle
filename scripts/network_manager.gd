@@ -19,6 +19,13 @@ var is_captain: bool = false
 # Ordered list of all peer IDs in the lobby (index = player_index)
 var _peers: Array = []
 
+# Public read of the current lobby roster — lets a UI repaint from the LATEST
+# known state on demand (e.g. right after building its widgets), instead of
+# only reacting to the next lobby_updated signal, which may already have fired
+# and been missed while those widgets didn't exist yet.
+var peer_ids: Array:
+	get: return _peers
+
 # Player identity — set these before calling host_game() / join_game()
 var my_name:      String = ""
 var my_color_idx: int    = 0
