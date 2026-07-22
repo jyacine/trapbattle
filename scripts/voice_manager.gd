@@ -1,25 +1,37 @@
 extends Node
 class_name VoiceManager
 
-# ── Voice chat over WebSocket relay ──────────────────────────────────────────
-# Architecture (server-relayed, like mainstream games / SFU middleware — NOT a
-# P2P mesh, which would leak every player's IP and scale O(N²)):
-#   1. Mic is open by default (always-on).  Press V or the on-screen button
-#      to MUTE / UNMUTE (toggle).
-#   2. Voice-activity detection (VAD): audio is only sent while you are actually
-#      speaking — silence is never transmitted, which slashes server relay load.
-#      Captured PCM is anti-alias downsampled to VOICE_RATE (16 kHz wideband) and
-#      compressed with 4-bit IMA-ADPCM (~0.5 byte/sample ≈ 64 kbps while speaking)
-#      before it is relayed through the server to all other peers. The server
-#      forwards the bytes opaquely (no decode), so codec/rate are a client-only
-#      concern — no server change is needed to tune them.
+# ── Voice chat — server-relayed star topology ────────────────────────────────
+# Like mainstream game voice / SFU middleware — NOT a P2P mesh, which would leak
+# every player's IP and scale O(N²). The server forwards bytes OPAQUELY (no
+# decode/re-encode), so codec choice is a client-only concern.
+#   1. Mic is open by default (always-on). Press M or the on-screen button to
+#      MUTE / UNMUTE.
+#   2. Voice-activity detection (VAD): only sent while actually speaking, which
+#      slashes relay load. A short pre-roll + continuous resampler stop word
+#      onsets being clipped (see PREROLL_S below).
+#   3. Codec/transport picked per platform, in priority order:
+#        a. Web + WebRTC DataChannel (UDP) OPEN → Opus via the browser's
+#           WebCodecs API, ~32 kbps. Best quality, lowest bandwidth.
+#        b. Any platform + DataChannel OPEN, no Opus (native has no WebCodecs)
+#           → raw PCM16 — UDP isn't bandwidth-contended so no need to compress.
+#        c. DataChannel not open (ICE/TURN failed) → WebSocket relay (TCP) with
+#           4-bit IMA-ADPCM, ~96 kbps — TCP shares the gameplay RPC pipe, so
+#           bandwidth matters here far more than on UDP.
+#      Opus runs at OPUS_RATE (48 kHz — the only rate Chrome's WebCodecs Opus
+#      encoder reliably accepts; other rates fail configure() asynchronously
+#      with no usable error). Decoded Opus is downsampled back to VOICE_RATE
+#      before it reaches the shared jitter buffer / AudioStreamGenerator, which
+#      always plays at VOICE_RATE regardless of which codec received it.
 #   4. player_speaking_changed fires so the UI can show / hide the speaking icon.
 #   NOTE: the mic bus is MUTED locally (see _setup_mic) so you never hear yourself.
 
 signal player_speaking_changed(pid: int, is_speaking: bool)
 signal voice_received(sender_id: int, samples: PackedFloat32Array)
 
-const VOICE_RATE      := 24000   # send/playback rate — wideband voice (12 kHz band), clearer
+const VOICE_RATE      := 24000   # internal playback rate — ALL decoded audio converges here
+const OPUS_RATE        := 48000  # Opus codec rate — the only rate Chrome's WebCodecs
+                                  # AudioEncoder reliably accepts for Opus (see _init_opus_web)
 const SEND_INTERVAL   := 0.02    # seconds between audio packets
 const SPEAKING_TIMEOUT := 0.30   # silence after last packet → "stopped speaking"
 const VAD_THRESHOLD   := 0.004   # mic RMS above this counts as speech (favor transmitting)
@@ -78,12 +90,18 @@ const RTC_TURN_USER := "tbvoice"
 const RTC_TURN_PASS := "96d12f6eb70c28648c18d4decba76c6e"
 const RTC_CH_ID    := 1          # negotiated DataChannel id — MUST match the server
 
-# ICE server list shared by client PC setup — STUN for reflexive discovery, TURN
-# (udp primary, tcp fallback for UDP-blocked networks) for the symmetric-NAT case.
+# ICE server list — STUN for reflexive discovery, TURN (UDP only) for the
+# symmetric-NAT/CGNAT case. NO TCP/TLS TURN variant: the server's webrtc-native
+# GDExtension is built on libdatachannel, whose ICE backend (libjuice) does not
+# implement TURN over TCP or TLS — confirmed both by the server log ("TURN
+# transports TCP and TLS are not supported with libjuice") and libdatachannel's
+# own docs. A "?transport=tcp" URL here is silently dead weight on the server:
+# it can only ever gather/accept UDP relay candidates, so offering more just
+# adds ICE-gathering noise and wasted round-trips on every connection.
 static func _ice_servers() -> Array:
 	return [
 		{ "urls": [RTC_STUN] },
-		{ "urls": [RTC_TURN, RTC_TURN + "?transport=tcp"],
+		{ "urls": [RTC_TURN],
 		  "username": RTC_TURN_USER, "credential": RTC_TURN_PASS },
 	]
 
@@ -197,15 +215,17 @@ func _ready() -> void:
 	if USE_WEBRTC and not multiplayer.is_server():
 		_setup_webrtc()
 
-# Web Opus via WebCodecs — DISABLED. Live server diagnostics showed every web
-# client stuck at tx_ws=0 with codec=opus: mic frames flowed (rate-cal measured
-# ~50 kHz) but the browser AudioEncoder produced no packets. Chrome's WebCodecs
-# Opus implementation only guarantees 48 kHz; our 24 kHz configure() fails
-# asynchronously (the error lands in the browser console only) and the encode
-# queue stays empty forever, so NOTHING is ever transmitted. Web now uses the
-# PCM16-over-relay path, which the E2E test validates at SNR 64 dB.
-# Re-enable only with a full 48 kHz pipeline (encoder + decoder + jitter rate).
-const USE_OPUS_WEB := false
+# Web Opus via WebCodecs. Previously disabled: live diagnostics showed every
+# web client stuck at tx_ws=0 with codec=opus — mic frames flowed but the
+# browser AudioEncoder produced no packets, because it was configured at
+# VOICE_RATE (24 kHz) and Chrome's WebCodecs Opus encoder only reliably accepts
+# 48 kHz (configure() otherwise fails ASYNCHRONOUSLY — no exception at the
+# call site, the error lands in the browser console only, so the old code had
+# no way to detect and fall back). Fixed by running Opus at its own OPUS_RATE
+# (48 kHz) end-to-end — capture resample target, JS encoder/decoder config —
+# and downsampling decoded audio to VOICE_RATE only where it rejoins the shared
+# jitter buffer (see _poll_opus_decoded). ADPCM/PCM16 paths are untouched.
+const USE_OPUS_WEB := true
 
 func _init_opus_web() -> void:
 	if not USE_OPUS_WEB:
@@ -219,7 +239,7 @@ func _init_opus_web() -> void:
 	# change is needed. Single-quoted JS strings avoid conflicts with GDScript quotes.
 	var js: String = "window.TBVoice=(function(){var enc=null,decs={},encQ=[],decQ={},SR=24000;function init(sr,br){SR=sr;enc=new AudioEncoder({output:function(c){var b=new Uint8Array(c.byteLength);c.copyTo(b);encQ.push(b);},error:function(e){console.error('[TBVoice enc]',e);}});enc.configure({codec:'opus',sampleRate:sr,numberOfChannels:1,bitrate:br});}function encode(f32,ts){if(!enc)return;var ad=new AudioData({format:'f32-planar',sampleRate:SR,numberOfFrames:f32.length,numberOfChannels:1,timestamp:ts,data:f32});enc.encode(ad);ad.close();}function pollEnc(){return encQ.splice(0).map(function(b){return Array.from(b);});}function initDec(pid){if(decs[pid])return;decQ[pid]=[];var dec=new AudioDecoder({output:function(ad){var b=new Float32Array(ad.numberOfFrames);ad.copyTo(b,{planeIndex:0,format:'f32-planar'});decQ[pid].push(b);ad.close();},error:function(e){console.error('[TBVoice dec pid='+pid+']',e);}});dec.configure({codec:'opus',sampleRate:SR,numberOfChannels:1});decs[pid]=dec;}function decode(pid,bytes,ts){var dec=decs[pid];if(!dec)return;dec.decode(new EncodedAudioChunk({type:'key',timestamp:ts,data:bytes}));}function pollDec(pid){return(decQ[pid]||[]).splice(0).map(function(b){return Array.from(b);});}return{init:init,encode:encode,pollEnc:pollEnc,initDec:initDec,decode:decode,pollDec:pollDec};})();"
 	JavaScriptBridge.eval(js, true)
-	JavaScriptBridge.eval("window.TBVoice.init(%d, 32000)" % VOICE_RATE, true)
+	JavaScriptBridge.eval("window.TBVoice.init(%d, 32000)" % OPUS_RATE, true)
 	_opus_web = true
 
 func _setup_mic() -> void:
@@ -391,14 +411,19 @@ func _capture_and_send() -> void:
 	# Resample CONTINUOUSLY — during silence too. The old code reset the
 	# resampler at every speech onset, discarding its buffered tail: combined
 	# with the VAD threshold this clipped the first syllable of each sentence.
-	var samples := _resample_stream(frames, _capture_rate, float(VOICE_RATE))
+	# Target rate depends on the active codec: Opus needs its own OPUS_RATE
+	# (48 kHz); ADPCM/PCM16 use VOICE_RATE. _opus_web is fixed for the life of
+	# this instance (decided once in _ready()), so the resample timeline in
+	# _rs_in/_rs_pos stays internally consistent — it's never fed two rates.
+	var send_rate: float = float(OPUS_RATE) if _opus_web else float(VOICE_RATE)
+	var samples := _resample_stream(frames, _capture_rate, send_rate)
 
 	if not speaking:
 		# Not transmitting — keep the freshest PREROLL_S of audio so the next
 		# burst can prepend the soft onset that sat below the VAD threshold.
 		if not samples.is_empty():
 			_preroll.append_array(samples)
-			var maxn := int(PREROLL_S * float(VOICE_RATE))
+			var maxn := int(PREROLL_S * send_rate)
 			if _preroll.size() > maxn:
 				_preroll = _preroll.slice(_preroll.size() - maxn)
 		return
@@ -418,8 +443,11 @@ func _capture_and_send() -> void:
 	# capture backlog at once; as ONE packet that can exceed the server's
 	# MAX_VOICE_PACKET_BYTES sanity cap (1600 B) and be dropped WHOLE — heard
 	# as a missing word right after every hitch (frequent on mobile web). The
-	# onset pre-roll burst is also split. 480 samples ≈ 244 B ADPCM / 961 B PCM16.
-	var chunk_n := 480
+	# onset pre-roll burst is also split. At VOICE_RATE (24 kHz): 480 samples
+	# ≈ 244 B ADPCM / 961 B PCM16. At OPUS_RATE (48 kHz): 960 samples, tiny
+	# once Opus-encoded (~80 B at 32 kbps) — WebCodecs frames it internally,
+	# this is just how much raw PCM we hand it per call.
+	var chunk_n := int(0.02 * send_rate)
 	var off := 0
 	while off < samples.size():
 		var part := samples.slice(off, mini(off + chunk_n, samples.size()))
@@ -484,8 +512,9 @@ func _poll_opus_encoded() -> void:
 			_rpc_voice.rpc_id(1, payload, my_id)
 			_diag_tx_ws += 1
 
-# Poll the JS Opus decoder queue for each active speaker and push decoded PCM to
-# their jitter buffers. Called every _process tick so decoded audio is never stale.
+# Poll the JS Opus decoder queue for each active speaker, downsample its
+# OPUS_RATE (48 kHz) output to VOICE_RATE, and push to the jitter buffer.
+# Called every _process tick so decoded audio is never stale.
 func _poll_opus_decoded() -> void:
 	for pid in _speakers.keys():
 		var raw = JavaScriptBridge.eval("JSON.stringify(window.TBVoice.pollDec(%d))" % pid)
@@ -497,11 +526,31 @@ func _poll_opus_decoded() -> void:
 		for frame in frames:
 			if not frame is Array:
 				continue
-			var mono := PackedFloat32Array()
-			mono.resize(frame.size())
+			var raw48 := PackedFloat32Array()
+			raw48.resize(frame.size())
 			for i in frame.size():
-				mono[i] = clampf(float(frame[i]), -1.0, 1.0)
-			_push_pcm_to_jitter(pid, mono)
+				raw48[i] = clampf(float(frame[i]), -1.0, 1.0)
+			var mono := _resample_decoded(pid, raw48)
+			if not mono.is_empty():
+				_push_pcm_to_jitter(pid, mono)
+
+# Per-peer streaming resample state for the Opus DECODE path (OPUS_RATE output
+# -> VOICE_RATE playback). Mirrors _rs_in/_rs_pos but keyed per remote peer:
+# each speaker decodes independently and needs its own continuous timeline.
+var _dec_rs_in:  Dictionary = {}   # pid -> PackedFloat32Array (unconsumed decoded audio)
+var _dec_rs_pos: Dictionary = {}   # pid -> float (fractional cursor)
+
+func _resample_decoded(pid: int, mono48: PackedFloat32Array) -> PackedFloat32Array:
+	var buf: PackedFloat32Array = _dec_rs_in.get(pid, PackedFloat32Array())
+	var pos: float = _dec_rs_pos.get(pid, 0.0)
+	var base := buf.size()
+	buf.resize(base + mono48.size())
+	for i in mono48.size():
+		buf[base + i] = mono48[i]
+	var r := resample_stream(buf, float(OPUS_RATE), float(VOICE_RATE), pos)
+	_dec_rs_in[pid]  = r["tail"]
+	_dec_rs_pos[pid] = r["pos"]
+	return r["out"]
 
 # Clear the streaming resampler + pre-roll (called on mute/unmute only — the
 # resample timeline stays continuous across speech bursts).
@@ -928,6 +977,8 @@ func remove_speaker(pid: int) -> void:
 	_jq.erase(pid)
 	_jq_pos.erase(pid)
 	_jq_play.erase(pid)
+	_dec_rs_in.erase(pid)
+	_dec_rs_pos.erase(pid)
 	_speaking_timers.erase(pid)
 	player_speaking_changed.emit(pid, false)
 	
